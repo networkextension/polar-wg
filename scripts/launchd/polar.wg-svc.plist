@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  polar-wg-svc launchd plist for macOS user-mode auto-start.
+
+  Drop at ~/Library/LaunchAgents/polar.wg-svc.plist, then:
+    launchctl load -w ~/Library/LaunchAgents/polar.wg-svc.plist
+
+  The plist invokes the wrapper at ~/.local/bin/polar-wg-svc-launch.sh
+  which sources per-box secrets from ~/wg-svc.env. Secrets stay out
+  of the committed file — see scripts/launchd/wg-svc.env.sample for
+  the env file shape.
+
+  See scripts/launchd/setup-wg-svc.sh for a one-shot installer.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>polar.wg-svc</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/local/.local/bin/polar-wg-svc-launch.sh</string>
+  </array>
+
+  <!-- Auto-start at user login + auto-restart only on non-zero exit
+       (`launchctl unload` actually stops wg-svc when an admin wants
+       to take it down). ThrottleInterval gives Postgres time to come
+       up before wg-svc loops on polar_wg connection errors. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/polar.wg-svc.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/polar.wg-svc.log</string>
+</dict>
+</plist>
