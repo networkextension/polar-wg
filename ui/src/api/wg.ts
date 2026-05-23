@@ -1,6 +1,6 @@
 // Typed fetch wrappers for /api/admin/wg-* (Phase 2 — multi-hub).
 
-import { requestJson } from "./http.js";
+import { requestJson } from "@networkextension/polar-ui-common/api/http";
 import type {
   WGBundleListResponse,
   WGBundleResponse,
