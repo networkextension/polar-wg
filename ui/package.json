@@ -1,0 +1,17 @@
+{
+  "name": "polar-wg-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@networkextension/polar-ui-common": "^0.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.3"
+  }
+}

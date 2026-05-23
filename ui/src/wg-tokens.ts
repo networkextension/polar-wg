@@ -21,10 +21,10 @@ import {
   setWGBundleLatest,
   uploadWGBundle,
 } from "./api/wg.js";
-import { logout } from "./api/session.js";
-import { byId } from "./lib/dom.js";
-import { hydrateSiteBrand, hydrateSidebarFoot } from "./lib/site.js";
-import { bindThemeSync, initStoredTheme } from "./lib/theme.js";
+import { logout } from "@networkextension/polar-ui-common/api/session";
+import { byId } from "@networkextension/polar-ui-common/lib/dom";
+import { hydrateSiteBrand, hydrateSidebarFoot } from "@networkextension/polar-ui-common/lib/site";
+import { bindThemeSync, initStoredTheme } from "@networkextension/polar-ui-common/lib/theme";
 import type { WGBundle, WGDevice, WGHub, WGToken } from "./types/wg.js";
 
 initStoredTheme();

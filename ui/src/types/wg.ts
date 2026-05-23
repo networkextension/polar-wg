@@ -1,6 +1,9 @@
 // Mirrors internal/app/dock/wg_store.go (Phase 2).
 
-import type { ErrorResponse } from "./dashboard.js";
+export type ErrorResponse = {
+  error?: string;
+  message?: string;
+};
 
 export type WGHub = {
   id: number;
