@@ -253,7 +253,7 @@ func (p *Plugin) allocateDevice(tx *sql.Tx, in wgRegisterInput, tok *WGToken, hu
 	if err != nil {
 		return nil, err
 	}
-	dIndex, err := pickFreeDIndex(tx, site.ID)
+	dIndex, err := pickFreeDIndex(tx, hub.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -470,10 +470,28 @@ func pickFreeSIndexInHub(tx *sql.Tx, hubID int64) (int, error) {
 	return 0, errWGSiteSlotsExhausted
 }
 
-func pickFreeDIndex(tx *sql.Tx, siteID int64) (int, error) {
+// pickFreeDIndex scans every device under the hub (across all sites)
+// for its d_index, then returns the smallest 2..254 that isn't taken.
+//
+// Why hub-scoped, not site-scoped: deviceIP(d) maps d → the last
+// octet of the hub's /24 mesh CIDR, so all sites under one hub draw
+// from the same 254-address pool. A site-scoped search would let two
+// sites both pick d=2 → both try to insert device_ip=10.88.0.2 → the
+// second one trips the wg_devices_device_ip_key UNIQUE constraint
+// and bubbles up as a 500 from /v1/register.
+//
+// A future /16 mesh with per-site /24 sub-partitioning will need to
+// re-introduce site scoping AND adjust deviceIP() to offset by
+// (site.s_index << 8) — but until that PR lands, every site shares
+// the single octet space and must be allocated globally.
+func pickFreeDIndex(tx *sql.Tx, hubID int64) (int, error) {
 	rows, err := tx.Query(
-		`SELECT d_index FROM wg_devices WHERE site_id = $1 AND removed_at IS NULL ORDER BY d_index`,
-		siteID,
+		`SELECT d.d_index
+		   FROM wg_devices d
+		   JOIN wg_sites s ON s.id = d.site_id
+		  WHERE s.hub_id = $1 AND d.removed_at IS NULL
+		  ORDER BY d.d_index`,
+		hubID,
 	)
 	if err != nil {
 		return 0, err
