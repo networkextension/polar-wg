@@ -14,6 +14,7 @@ import {
   listWGBundles,
   listWGDevices,
   listWGHubs,
+  listWGHubStatus,
   listWGTokens,
   removeWGDevice,
   resetWGHubBind,
@@ -25,7 +26,14 @@ import { logout } from "@networkextension/polar-ui-common/api/session";
 import { byId } from "@networkextension/polar-ui-common/lib/dom";
 import { hydrateSiteBrand, hydrateSidebarFoot } from "@networkextension/polar-ui-common/lib/site";
 import { bindThemeSync, initStoredTheme } from "@networkextension/polar-ui-common/lib/theme";
-import type { WGBundle, WGDevice, WGHub, WGToken } from "./types/wg.js";
+import type {
+  WGBundle,
+  WGDevice,
+  WGHub,
+  WGHubPeerSample,
+  WGHubStatusRow,
+  WGToken,
+} from "./types/wg.js";
 
 initStoredTheme();
 bindThemeSync();
@@ -39,7 +47,7 @@ void hydrateSidebarFoot();
 
 // ---- tabs ----
 
-const tabs = ["hubs", "tokens", "devices", "bundles"] as const;
+const tabs = ["status", "hubs", "tokens", "devices", "bundles"] as const;
 type TabKey = (typeof tabs)[number];
 
 function switchTab(target: TabKey): void {
@@ -49,6 +57,12 @@ function switchTab(target: TabKey): void {
     const pane = byId<HTMLElement>(`pane${cap}`);
     if (pane) pane.hidden = t !== target;
   });
+  // Status tab: refresh on every entry so operators see fresh peer data
+  // without waiting for the 15s timer. The poller still runs while
+  // hidden — this just avoids a stale paint on tab switch.
+  if (target === "status") {
+    void refreshStatus();
+  }
 }
 tabs.forEach((t) => {
   const cap = t.charAt(0).toUpperCase() + t.slice(1);
@@ -74,6 +88,144 @@ function fmtBytes(n: number): string {
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
+
+// ---- Status tab (live hub peer state from dock /internal/v1/wg-peer-status) ----
+
+const hubStatusGrid = byId<HTMLElement>("hubStatusGrid");
+const hubStatusEmpty = byId<HTMLElement>("hubStatusEmpty");
+const hubStatusSummary = byId<HTMLElement>("hubStatusSummary");
+const hubStatusRefreshBtn = byId<HTMLButtonElement>("hubStatusRefreshBtn");
+
+function esc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmtAgeSec(ageSec?: number): string {
+  if (ageSec === undefined || ageSec === null || !Number.isFinite(ageSec)) return "—";
+  if (ageSec < 60) return `${ageSec}s`;
+  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m`;
+  return `${Math.floor(ageSec / 3600)}h`;
+}
+
+function handshakeClass(ageSec?: number): string {
+  if (ageSec === undefined || ageSec === null) return "wg-status-handshake-stale";
+  if (ageSec < 60) return "wg-status-handshake-fresh";
+  if (ageSec < 300) return "wg-status-handshake-warn";
+  return "wg-status-handshake-stale";
+}
+
+function truncPubkey(k?: string): string {
+  if (!k) return "—";
+  if (k.length <= 16) return k;
+  return `${k.slice(0, 8)}…${k.slice(-6)}`;
+}
+
+function renderPeerRow(p: WGHubPeerSample): string {
+  const handshakeCls = handshakeClass(p.handshake_age_sec);
+  const handshakeAge = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
+  return `
+    <tr>
+      <td><code title="${esc(p.public_key)}">${esc(truncPubkey(p.public_key))}</code></td>
+      <td><code>${esc(p.endpoint ?? "—")}</code></td>
+      <td><code>${esc(p.allowed_ips ?? "—")}</code></td>
+      <td class="${handshakeCls}">${esc(handshakeAge)}</td>
+      <td>${esc(fmtBytes(p.bytes_rx ?? 0))}</td>
+      <td>${esc(fmtBytes(p.bytes_tx ?? 0))}</td>
+      <td>${p.keepalive_sec ? `${p.keepalive_sec}s` : "—"}</td>
+    </tr>
+  `;
+}
+
+function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
+  const card = document.createElement("div");
+  card.className = "wg-status-card";
+  const headTitle = `<span class="wg-status-card-title">${esc(row.label || row.slug)}</span>`;
+  const headSlug = `<code>${esc(row.slug)}</code>`;
+  const headEndpoint = row.endpoint ? `<code>${esc(row.endpoint)}</code>` : "";
+  const headIP = row.wg_ip ? `<code>${esc(row.wg_ip)}</code>` : "";
+
+  let statusHtml = "";
+  let peerTableHtml = "";
+
+  if (!row.status) {
+    statusHtml = `<div class="wg-status-card-status dim wg-status-empty-banner">no sample yet — hub agent not reporting</div>`;
+  } else {
+    const s = row.status;
+    const peers = s.peers ?? [];
+    const ageMs = Date.now() - new Date(s.recorded_at).getTime();
+    const ageStr = Number.isFinite(ageMs) ? fmtAgeSec(Math.floor(ageMs / 1000)) : "?";
+    const staleBadge = s.stale ? ` · <span class="wg-status-stale-banner">stale</span>` : "";
+    statusHtml = `
+      <div class="wg-status-card-status">
+        ${s.peer_count} peers · iface <code>${esc(s.iface)}</code> · sample ${ageStr} ago${staleBadge}
+      </div>
+    `;
+    if (peers.length > 0) {
+      peerTableHtml = `
+        <table class="wg-status-peer-table">
+          <thead>
+            <tr>
+              <th>peer pubkey</th>
+              <th>endpoint</th>
+              <th>allowed_ips</th>
+              <th>handshake</th>
+              <th>rx</th>
+              <th>tx</th>
+              <th>keepalive</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${peers.map(renderPeerRow).join("")}
+          </tbody>
+        </table>
+      `;
+    } else {
+      peerTableHtml = `<div class="meta-subtitle" style="margin-top:6px;">no peers connected</div>`;
+    }
+  }
+
+  card.innerHTML = `
+    <div class="wg-status-card-head">${headTitle} ${headSlug}</div>
+    <div class="wg-status-card-meta">
+      ${headEndpoint ? `endpoint ${headEndpoint}` : ""}
+      ${headIP ? `· wg ${headIP}` : ""}
+    </div>
+    ${statusHtml}
+    ${peerTableHtml}
+  `;
+  return card;
+}
+
+async function refreshStatus(): Promise<void> {
+  if (!hubStatusGrid) return;
+  try {
+    const { data } = await listWGHubStatus();
+    const rows: WGHubStatusRow[] = data.hubs ?? [];
+    hubStatusGrid.innerHTML = "";
+    if (rows.length === 0) {
+      if (hubStatusEmpty) hubStatusEmpty.hidden = false;
+      if (hubStatusSummary) hubStatusSummary.textContent = "no hubs";
+      return;
+    }
+    if (hubStatusEmpty) hubStatusEmpty.hidden = true;
+    rows.forEach((r: WGHubStatusRow) => hubStatusGrid.appendChild(renderHubCard(r)));
+    const reported = rows.filter((r: WGHubStatusRow) => r.status !== null).length;
+    const stale = rows.filter((r: WGHubStatusRow) => r.status?.stale === true).length;
+    const summary =
+      stale > 0
+        ? `${reported}/${rows.length} reporting · ${stale} stale`
+        : `${reported}/${rows.length} reporting`;
+    if (hubStatusSummary) hubStatusSummary.textContent = summary;
+  } catch (err) {
+    if (hubStatusSummary) hubStatusSummary.textContent = `error: ${(err as Error).message}`;
+  }
+}
+
+hubStatusRefreshBtn?.addEventListener("click", () => void refreshStatus());
 
 // ---- shared state ----
 
@@ -675,6 +827,7 @@ uploadBundleSubmitBtn?.addEventListener("click", async () => {
 
 // ---- initial load + polling ----
 
+void refreshStatus();
 void refreshHubs();
 void refreshTokens();
 void refreshDevices();
@@ -683,5 +836,11 @@ void refreshBundles();
 window.setInterval(() => {
   if (!byId<HTMLElement>("paneDevices").hidden) {
     void refreshDevices();
+  }
+  // Status pane auto-refresh: shorter cadence (15s) since this is the
+  // live-status view. Dock's cache itself updates per the agent's
+  // 30s sampling, so anything faster than ~15s is wasted load.
+  if (!byId<HTMLElement>("paneStatus")?.hidden) {
+    void refreshStatus();
   }
 }, 15_000);
