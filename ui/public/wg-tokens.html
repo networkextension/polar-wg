@@ -43,14 +43,52 @@
         <div class="lp-topbar">
           <span class="lp-topbar-title">WG Mesh · 多 Hub 入网管理</span>
           <div class="lp-topbar-end" style="display:flex; gap:6px;">
+            <button class="lp-tab lp-tab-active" data-tab="status" id="tabStatus">📡 Status</button>
             <button class="lp-tab" data-tab="hubs" id="tabHubs">🌐 Hubs</button>
-            <button class="lp-tab lp-tab-active" data-tab="tokens" id="tabTokens">🔑 Tokens</button>
+            <button class="lp-tab" data-tab="tokens" id="tabTokens">🔑 Tokens</button>
             <button class="lp-tab" data-tab="devices" id="tabDevices">💻 Devices</button>
             <button class="lp-tab" data-tab="bundles" id="tabBundles">📦 Bundles</button>
           </div>
         </div>
 
         <div class="lp-content" style="padding: 12px; overflow-y:auto;">
+
+          <!-- Hub Status tab — live from dock cache (PR #345). -->
+          <section id="paneStatus" class="lp-pane">
+            <style>
+              .wg-status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 12px; }
+              .wg-status-card { border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 10px 12px; background: var(--card-bg, transparent); }
+              .wg-status-card-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+              .wg-status-card-title { font-weight: 600; }
+              .wg-status-card-meta { display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }
+              .wg-status-card-status { margin-top:6px; }
+              .wg-status-card-status.dim { opacity: 0.6; }
+              .wg-status-toggle { background:none; border:0; padding:0; color: var(--accent, #36c); cursor:pointer; font-size:12px; }
+              .wg-status-peer-table { width:100%; border-collapse: collapse; margin-top:8px; font-size: 12px; }
+              .wg-status-peer-table th, .wg-status-peer-table td { text-align:left; padding: 4px 6px; border-bottom: 1px solid var(--border-subtle, #eee); white-space: nowrap; }
+              .wg-status-handshake-fresh { color: #2a8a2a; }
+              .wg-status-handshake-warn  { color: #b58900; }
+              .wg-status-handshake-stale { color: #c0392b; }
+              .wg-status-stale-banner { color: var(--warning, #b58900); }
+              .wg-status-empty-banner { color: var(--muted, #888); }
+            </style>
+            <div class="lp-preview-main">
+              <div class="lp-preview-head">
+                <span class="badge">Hub 实时状态</span>
+                <span id="hubStatusSummary" class="lp-mode-badge">—</span>
+                <span style="flex:1;"></span>
+                <button id="hubStatusRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
+              </div>
+              <div class="lp-preview-body">
+                <p class="meta-subtitle" style="margin: 0 0 12px 0;">
+                  来源：dock 缓存 (<code>GET /internal/v1/wg-peer-status</code>)，每 15s 自动刷新。
+                  Hub 上的 polar-agent 每 30s 上报一次 <code>wg show</code> 快照；超过 60s 未上报标记为 <em>stale</em>。
+                </p>
+                <div id="hubStatusGrid" class="wg-status-grid"></div>
+                <div id="hubStatusEmpty" class="meta-subtitle" hidden>暂无 hub。先去 🔑 Tokens 创建一个 role=hub token。</div>
+              </div>
+            </div>
+          </section>
 
           <!-- Hubs tab -->
           <section id="paneHubs" class="lp-pane" hidden>
@@ -80,7 +118,7 @@
           </section>
 
           <!-- Tokens tab -->
-          <section id="paneTokens" class="lp-pane">
+          <section id="paneTokens" class="lp-pane" hidden>
             <div class="lp-preview-main">
               <div class="lp-preview-head">
                 <span class="badge">入网 Token</span>

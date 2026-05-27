@@ -8,6 +8,7 @@ import type {
   WGHub,
   WGHubListResponse,
   WGHubResponse,
+  WGHubStatusResponse,
   WGSiteListResponse,
   WGTokenCreateResponse,
   WGTokenListResponse,
@@ -36,6 +37,12 @@ export async function resetWGHubBind(id: number) {
   return requestJson<{ ok: boolean; error?: string }>(`/api/admin/wg-hubs/${id}/reset-bind`, {
     method: "POST",
   });
+}
+
+// ---- hub status (live, polled from dock cache) ----
+
+export async function listWGHubStatus() {
+  return requestJson<WGHubStatusResponse>("/api/admin/wg-hub-status");
 }
 
 // ---- tokens ----

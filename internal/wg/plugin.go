@@ -48,6 +48,11 @@ type Plugin struct {
 
 	metrics   *wgMetrics
 	startedAt time.Time
+
+	// hubStatus caches the latest `wg_peer_status` sample per hub
+	// iface pubkey, polled from dock's /internal/v1/wg-peer-status.
+	// Populated by startHubStatusPoll() in Start(ctx).
+	hubStatus *hubStatusCache
 }
 
 type Config struct {
@@ -160,6 +165,7 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 		admin.GET("/wg-devices", p.handleAdminWGDeviceList)
 		admin.DELETE("/wg-devices/:id", p.handleAdminWGDeviceRemove)
 		admin.GET("/wg-sites", p.handleAdminWGSiteList)
+		admin.GET("/wg-hub-status", p.handleAdminWGHubStatus)
 		admin.POST("/wg-bundles/upload", p.handleAdminWGBundleUpload)
 		admin.GET("/wg-bundles", p.handleAdminWGBundleList)
 		admin.POST("/wg-bundles/:id/set-latest", p.handleAdminWGBundleSetLatest)
@@ -172,6 +178,7 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 func (p *Plugin) Start(ctx context.Context) {
 	go p.heartbeatLoop(ctx)
 	p.startWGStaleDeviceGC(ctx)
+	p.startHubStatusPoll(ctx)
 }
 
 func (p *Plugin) Close() error {

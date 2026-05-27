@@ -95,6 +95,43 @@ export type WGSiteListResponse = ErrorResponse & { sites?: WGSite[] };
 export type WGBundleListResponse = ErrorResponse & { bundles?: WGBundle[] };
 export type WGBundleResponse = ErrorResponse & { bundle?: WGBundle; warning?: string; existing?: WGBundle };
 
+// ---- hub status (from dock /internal/v1/wg-peer-status, joined by pubkey) ----
+
+export type WGHubPeerSample = {
+  public_key: string;
+  endpoint?: string;
+  allowed_ips?: string;
+  latest_handshake_unix?: number;
+  handshake_age_sec?: number;
+  bytes_rx?: number;
+  bytes_tx?: number;
+  keepalive_sec?: number;
+  has_preshared_key?: boolean;
+};
+
+export type WGHubStatusEntry = {
+  host_id: string;
+  iface: string;
+  recorded_at: string;
+  stale: boolean;
+  peer_count: number;
+  listen_port?: number;
+  peers?: WGHubPeerSample[];
+  extra?: Record<string, unknown>;
+};
+
+export type WGHubStatusRow = {
+  id: number;
+  slug: string;
+  label: string;
+  pubkey: string;
+  endpoint: string;
+  wg_ip: string;
+  status: WGHubStatusEntry | null;
+};
+
+export type WGHubStatusResponse = ErrorResponse & { hubs?: WGHubStatusRow[] };
+
 // Token-create POST payload (multi-role).
 export type WGTokenCreatePayload = {
   label: string;
