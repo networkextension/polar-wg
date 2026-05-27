@@ -37,6 +37,43 @@ const (
 	hubLocalWGBinDefaultPaths = "/opt/homebrew/bin/wg:/usr/local/bin/wg:/usr/bin/wg"
 )
 
+// hubLocalBackend describes which CLI we shell out to + which parser
+// to feed its output through. Both flavors emit the same parsedDump
+// shape so the rest of the poll loop doesn't care.
+type hubLocalBackend struct {
+	name      string // "wgctl" or "wg" — purely for log lines
+	bin       string // resolved absolute path
+	usesSudo  bool   // wgctl on macOS needs sudo to read /var/run/wireguard/<iface>.sock
+	parser    func(iface, ifacePubKey, raw string) (parsedDump, error)
+	cmdArgs   func(iface string) []string
+	pubKeyEnv string // operator-supplied pubkey (wgctl can't print it)
+}
+
+// pickHubLocalBackend prefers wgctl (wg-mac NE-backed hubs), falls
+// back to wg(8) (kernel / wireguard-go hubs). Returns nil when neither
+// is on the box.
+func pickHubLocalBackend() *hubLocalBackend {
+	if bin := resolveWGCtlBin(); bin != "" {
+		return &hubLocalBackend{
+			name:     "wgctl",
+			bin:      bin,
+			usesSudo: true,
+			parser:   parseWGCtlShow,
+			cmdArgs:  func(iface string) []string { return []string{"show", iface} },
+		}
+	}
+	if bin := resolveWGBin(); bin != "" {
+		return &hubLocalBackend{
+			name:     "wg",
+			bin:      bin,
+			usesSudo: false,
+			parser:   func(iface, _ string, raw string) (parsedDump, error) { return parseWGShowDump(iface, raw) },
+			cmdArgs:  func(iface string) []string { return []string{"show", iface, "dump"} },
+		}
+	}
+	return nil
+}
+
 // startHubLocalSelfPoll wires the self-poll goroutine when configured.
 // No-op when POLAR_WG_HUB_LOCAL_POLL_IFACE is unset — silent for
 // non-hub plugin deployments. Logs once at INFO when activating.
@@ -45,21 +82,27 @@ func (p *Plugin) startHubLocalSelfPoll(ctx context.Context) {
 	if iface == "" {
 		return
 	}
-	wgBin := resolveWGBin()
-	if wgBin == "" {
-		log.Printf("wg: hub-local self-poll: requested iface=%s but `wg` binary not found on PATH (set %s or install wireguard-tools)",
-			iface, hubLocalWGBinEnvOverride)
+	backend := pickHubLocalBackend()
+	if backend == nil {
+		log.Printf("wg: hub-local self-poll: requested iface=%s but neither `wgctl` (wg-mac NE) nor `wg` (wireguard-tools) found on PATH",
+			iface)
+		return
+	}
+	ifacePubKey := hubLocalIfacePubKey()
+	if backend.name == "wgctl" && ifacePubKey == "" {
+		log.Printf("wg: hub-local self-poll: %s backend can't surface the interface public key — set %s=<base64> so cache rows can be joined against wg_hubs.pubkey",
+			backend.name, hubLocalIfacePubKeyEnv)
 		return
 	}
 	interval := hubLocalPollInterval()
-	log.Printf("wg: hub-local self-poll: iface=%s wg=%s interval=%v (pushing to %s)",
-		iface, wgBin, interval, hubLocalPushPath)
-	go p.hubLocalSelfPollLoop(ctx, iface, wgBin, interval)
+	log.Printf("wg: hub-local self-poll: iface=%s backend=%s bin=%s interval=%v sudo=%v (pushing to %s)",
+		iface, backend.name, backend.bin, interval, backend.usesSudo, hubLocalPushPath)
+	go p.hubLocalSelfPollLoop(ctx, iface, ifacePubKey, backend, interval)
 }
 
-func (p *Plugin) hubLocalSelfPollLoop(ctx context.Context, iface, wgBin string, interval time.Duration) {
+func (p *Plugin) hubLocalSelfPollLoop(ctx context.Context, iface, ifacePubKey string, backend *hubLocalBackend, interval time.Duration) {
 	// One immediate run so the cache populates before the first ticker.
-	p.hubLocalSelfPollOnce(ctx, iface, wgBin)
+	p.hubLocalSelfPollOnce(ctx, iface, ifacePubKey, backend)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -67,22 +110,29 @@ func (p *Plugin) hubLocalSelfPollLoop(ctx context.Context, iface, wgBin string, 
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			p.hubLocalSelfPollOnce(ctx, iface, wgBin)
+			p.hubLocalSelfPollOnce(ctx, iface, ifacePubKey, backend)
 		}
 	}
 }
 
-func (p *Plugin) hubLocalSelfPollOnce(ctx context.Context, iface, wgBin string) {
+func (p *Plugin) hubLocalSelfPollOnce(ctx context.Context, iface, ifacePubKey string, backend *hubLocalBackend) {
 	dumpCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(dumpCtx, wgBin, "show", iface, "dump").Output()
+	var cmd *exec.Cmd
+	if backend.usesSudo {
+		args := append([]string{"-n", backend.bin}, backend.cmdArgs(iface)...)
+		cmd = exec.CommandContext(dumpCtx, "sudo", args...)
+	} else {
+		cmd = exec.CommandContext(dumpCtx, backend.bin, backend.cmdArgs(iface)...)
+	}
+	out, err := cmd.Output()
 	if err != nil {
-		log.Printf("wg: hub-local self-poll: `wg show %s dump` failed: %v", iface, err)
+		log.Printf("wg: hub-local self-poll: %s exec failed: %v", backend.name, err)
 		return
 	}
-	sample, err := parseWGShowDump(iface, string(out))
+	sample, err := backend.parser(iface, ifacePubKey, string(out))
 	if err != nil {
-		log.Printf("wg: hub-local self-poll: parse failed: %v", err)
+		log.Printf("wg: hub-local self-poll: %s parse failed: %v", backend.name, err)
 		return
 	}
 	body := map[string]any{
