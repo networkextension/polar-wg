@@ -179,6 +179,7 @@ func (p *Plugin) Start(ctx context.Context) {
 	go p.heartbeatLoop(ctx)
 	p.startWGStaleDeviceGC(ctx)
 	p.startHubStatusPoll(ctx)
+	p.startHubLocalSelfPoll(ctx)
 }
 
 func (p *Plugin) Close() error {
