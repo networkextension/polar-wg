@@ -231,11 +231,17 @@ func (p *Plugin) heartbeatLoop(ctx context.Context) {
 	}
 }
 
+// wgUIRoutes — sidebar entries this plugin contributes.
+var wgUIRoutes = []sdk.UIRoute{
+	{Path: "/wg-tokens.html", Label: "WG Mesh", Icon: "network", AdminOnly: true, Order: 75},
+}
+
 func (p *Plugin) beat(_ context.Context) {
 	err := p.Dock.Heartbeat(sdk.HeartbeatOpts{
 		Version:       p.Ver,
 		Endpoint:      p.Listen,
 		UptimeSeconds: int64(time.Since(p.startedAt).Seconds()),
+		UIRoutes:      wgUIRoutes,
 	})
 	if err != nil {
 		log.Printf("wg: heartbeat failed: %v", err)

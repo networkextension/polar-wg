@@ -44,6 +44,20 @@ func (p *Plugin) requireAdminViaDock() gin.HandlerFunc {
 		c.Set(ctxKeyUserID, res.UserID)
 		c.Set(ctxKeyUserRole, res.Role)
 		c.Set(ctxKeyWorkspaceID, res.WorkspaceID)
+
+		// Closed-by-default tenant access gate (Sprint 2 / task #196).
+		// Root workspace always passes via dock-side bypass; non-root
+		// requires an explicit workspace_plugin_access row enabled by
+		// the platform admin. Fail-closed on lookup error.
+		access, err := p.Dock.WorkspacePluginAccess(res.WorkspaceID, p.Name)
+		if err != nil || access == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "plugin access check failed"})
+			return
+		}
+		if !access.Enabled {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "workspace not granted access to wg"})
+			return
+		}
 		c.Next()
 	}
 }
