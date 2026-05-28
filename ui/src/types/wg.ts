@@ -109,6 +109,11 @@ export type WGHubPeerSample = {
   has_preshared_key?: boolean;
 };
 
+export type WGHubIfaceNet = {
+  addrs?: string[];
+  routes?: string[];
+};
+
 export type WGHubStatusEntry = {
   host_id: string;
   iface: string;
@@ -117,7 +122,7 @@ export type WGHubStatusEntry = {
   peer_count: number;
   listen_port?: number;
   peers?: WGHubPeerSample[];
-  extra?: Record<string, unknown>;
+  extra?: Record<string, unknown> & { iface_net?: WGHubIfaceNet };
 };
 
 export type WGHubStatusRow = {

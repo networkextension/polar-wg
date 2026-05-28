@@ -30,6 +30,7 @@ import type {
   WGBundle,
   WGDevice,
   WGHub,
+  WGHubIfaceNet,
   WGHubPeerSample,
   WGHubStatusRow,
   WGToken,
@@ -167,6 +168,66 @@ function renderPeerRow(p: WGHubPeerSample): string {
   `;
 }
 
+// addrMask returns the /N suffix of an addr like "10.88.0.1/24" → 24.
+function addrMask(cidr: string): number {
+  const m = /\/(\d+)$/.exec(cidr);
+  return m ? parseInt(m[1], 10) : -1;
+}
+
+// expectedSubnetForAddr derives the subnet route a properly-configured
+// hub would have. "10.88.0.1/24" → "10.88.0.0/24". Returns "" if the
+// addr can't be parsed cleanly.
+function expectedSubnetForAddr(cidr: string): string {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr);
+  if (!m) return "";
+  const oct = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10), parseInt(m[4], 10)];
+  const mask = parseInt(m[5], 10);
+  if (!Number.isFinite(mask) || mask < 0 || mask > 32) return "";
+  // Apply mask: zero out (32-mask) low bits across the 4 octets.
+  const bits = oct[0] * 0x1000000 + oct[1] * 0x10000 + oct[2] * 0x100 + oct[3];
+  const m32 = mask === 0 ? 0 : (0xFFFFFFFF << (32 - mask)) >>> 0;
+  const net = (bits & m32) >>> 0;
+  const a = (net >>> 24) & 0xFF;
+  const b = (net >>> 16) & 0xFF;
+  const c = (net >>> 8) & 0xFF;
+  const d = net & 0xFF;
+  return `${a}.${b}.${c}.${d}/${mask}`;
+}
+
+// renderIfaceNetRow surfaces hub interface state + flags the
+// "addr without matching subnet route" misconfig that causes peers
+// to handshake but TX/RX stays 0 on the hub side. Skips IPv4 /32
+// addrs since they don't imply a subnet route at all.
+function renderIfaceNetRow(info?: WGHubIfaceNet): string {
+  if (!info) return "";
+  const addrs = info.addrs ?? [];
+  const routes = info.routes ?? [];
+  if (addrs.length === 0 && routes.length === 0) return "";
+  const routeSet = new Set(routes);
+  const missing: string[] = [];
+  for (const a of addrs) {
+    const mask = addrMask(a);
+    if (mask <= 0 || mask >= 32) continue;
+    const expected = expectedSubnetForAddr(a);
+    if (expected && !routeSet.has(expected)) missing.push(expected);
+  }
+  const addrsHtml = addrs.length > 0
+    ? addrs.map((a) => `<code>${esc(a)}</code>`).join(" ")
+    : `<span class="dim">none</span>`;
+  const routesHtml = routes.length > 0
+    ? routes.map((r) => `<code>${esc(r)}</code>`).join(" ")
+    : `<span class="dim">none</span>`;
+  const warn = missing.length > 0
+    ? `<div class="wg-status-stale-banner" style="margin-top:4px;">⚠ missing subnet route${missing.length > 1 ? "s" : ""}: ${missing.map((m) => `<code>${esc(m)}</code>`).join(" ")} — hub can't reply to peers, run <code>sudo route add -inet ${esc(missing[0])} -interface &lt;iface&gt;</code></div>`
+    : "";
+  return `
+    <div class="wg-status-card-meta" style="margin-top:4px; font-size:12px;">
+      addr ${addrsHtml} · routes ${routesHtml}
+    </div>
+    ${warn}
+  `;
+}
+
 function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
   const card = document.createElement("div");
   card.className = "wg-status-card";
@@ -215,6 +276,10 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
     }
   }
 
+  const ifaceNetHtml = row.status?.extra?.iface_net
+    ? renderIfaceNetRow(row.status.extra.iface_net)
+    : "";
+
   card.innerHTML = `
     <div class="wg-status-card-head">${headTitle} ${headSlug}</div>
     <div class="wg-status-card-meta">
@@ -222,6 +287,7 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
       ${headIP ? `· wg ${headIP}` : ""}
     </div>
     ${statusHtml}
+    ${ifaceNetHtml}
     ${peerTableHtml}
   `;
   return card;

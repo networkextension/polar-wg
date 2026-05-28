@@ -135,6 +135,12 @@ func (p *Plugin) hubLocalSelfPollOnce(ctx context.Context, iface, ifacePubKey st
 		log.Printf("wg: hub-local self-poll: %s parse failed: %v", backend.name, err)
 		return
 	}
+	// Attach iface address + route snapshot so the admin UI can flag
+	// "hub has 10.88.0.1/24 but no 10.88.0.0/24 route" — that exact
+	// misconfig is why we built this field.
+	if sample.Data != nil {
+		sample.Data["iface_net"] = collectIfaceNetInfo(iface)
+	}
 	body := map[string]any{
 		"iface":            iface,
 		"iface_public_key": sample.IfacePublicKey,

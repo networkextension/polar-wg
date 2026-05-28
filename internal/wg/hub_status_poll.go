@@ -219,6 +219,15 @@ func (p *Plugin) fetchHubStatusOnce(ctx context.Context) (notFound bool) {
 		samples = append(samples, s)
 	}
 	p.hubStatus.replace(samples)
+	pks := make([]string, 0, len(samples))
+	for _, s := range samples {
+		pk := s.IfacePublicKey
+		if len(pk) > 12 {
+			pk = pk[:12] + "…"
+		}
+		pks = append(pks, pk)
+	}
+	log.Printf("wg: hub-status: fetched %d samples from dock; cache size %d; pubkeys=%v", len(samples), p.hubStatus.size(), pks)
 	return false
 }
 
