@@ -124,12 +124,39 @@ function truncPubkey(k?: string): string {
   return `${k.slice(0, 8)}…${k.slice(-6)}`;
 }
 
+// pubkey → device.name lookup. Populated by primePubkeyMap() on
+// page load; falls back to truncPubkey when a peer isn't in the
+// devices list (e.g. a hub-side leftover or a freshly joined client
+// that hasn't been listed yet).
+const pubkeyToName = new Map<string, string>();
+
+async function primePubkeyMap(): Promise<void> {
+  try {
+    const { data } = await listWGDevices(false);
+    for (const d of data.devices ?? []) {
+      if (d.pubkey && d.hostname) pubkeyToName.set(d.pubkey, d.hostname);
+    }
+    // Re-render status if it's already mounted, now that names exist.
+    if (!byId<HTMLElement>("paneStatus")?.hidden) void refreshStatus();
+  } catch {
+    /* swallow — peer rows just show pubkey */
+  }
+}
+
+function peerLabel(pubkey?: string): string {
+  if (!pubkey) return "—";
+  const name = pubkeyToName.get(pubkey);
+  const trunc = esc(truncPubkey(pubkey));
+  if (!name) return `<code title="${esc(pubkey)}">${trunc}</code>`;
+  return `<strong>${esc(name)}</strong> <code title="${esc(pubkey)}" style="opacity:0.6; font-size:11px;">${trunc}</code>`;
+}
+
 function renderPeerRow(p: WGHubPeerSample): string {
   const handshakeCls = handshakeClass(p.handshake_age_sec);
   const handshakeAge = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
   return `
     <tr>
-      <td><code title="${esc(p.public_key)}">${esc(truncPubkey(p.public_key))}</code></td>
+      <td>${peerLabel(p.public_key)}</td>
       <td><code>${esc(p.endpoint ?? "—")}</code></td>
       <td><code>${esc(p.allowed_ips ?? "—")}</code></td>
       <td class="${handshakeCls}">${esc(handshakeAge)}</td>
@@ -825,22 +852,28 @@ uploadBundleSubmitBtn?.addEventListener("click", async () => {
   }
 });
 
-// ---- initial load + polling ----
+// ---- initial load ----
 
 void refreshStatus();
 void refreshHubs();
 void refreshTokens();
 void refreshDevices();
 void refreshBundles();
+// devices fetch primes the pubkey→device map for the Status tab's
+// peer rows. Best-effort: status will show raw pubkey until this
+// resolves.
+void primePubkeyMap();
 
-window.setInterval(() => {
-  if (!byId<HTMLElement>("paneDevices").hidden) {
-    void refreshDevices();
-  }
-  // Status pane auto-refresh: shorter cadence (15s) since this is the
-  // live-status view. Dock's cache itself updates per the agent's
-  // 30s sampling, so anything faster than ~15s is wasted load.
-  if (!byId<HTMLElement>("paneStatus")?.hidden) {
-    void refreshStatus();
-  }
-}, 15_000);
+// Tab default: ?tab=<key> wins; otherwise "hubs" (operators want the
+// hubs list on landing, not the status view — same reason the 15s
+// auto-refresh ticker below got removed: don't burn cycles + chrome
+// real estate on a view the user didn't ask for).
+const initialTab = ((): TabKey => {
+  const p = new URLSearchParams(window.location.search).get("tab");
+  return (tabs as readonly string[]).includes(p ?? "") ? (p as TabKey) : "hubs";
+})();
+switchTab(initialTab);
+
+// Manual refresh only — operators wanted the "ui 不要乱刷新"
+// behavior, matching the hosts.ts/agents.ts cleanup. Each pane has
+// its own refresh button.

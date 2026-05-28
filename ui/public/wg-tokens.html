@@ -43,8 +43,8 @@
         <div class="lp-topbar">
           <span class="lp-topbar-title">WG Mesh · 多 Hub 入网管理</span>
           <div class="lp-topbar-end" style="display:flex; gap:6px;">
-            <button class="lp-tab lp-tab-active" data-tab="status" id="tabStatus">📡 Status</button>
-            <button class="lp-tab" data-tab="hubs" id="tabHubs">🌐 Hubs</button>
+            <button class="lp-tab" data-tab="status" id="tabStatus">📡 Status</button>
+            <button class="lp-tab lp-tab-active" data-tab="hubs" id="tabHubs">🌐 Hubs</button>
             <button class="lp-tab" data-tab="tokens" id="tabTokens">🔑 Tokens</button>
             <button class="lp-tab" data-tab="devices" id="tabDevices">💻 Devices</button>
             <button class="lp-tab" data-tab="bundles" id="tabBundles">📦 Bundles</button>
@@ -81,7 +81,7 @@
               </div>
               <div class="lp-preview-body">
                 <p class="meta-subtitle" style="margin: 0 0 12px 0;">
-                  来源：dock 缓存 (<code>GET /internal/v1/wg-peer-status</code>)，每 15s 自动刷新。
+                  来源：dock 缓存 (<code>GET /internal/v1/wg-peer-status</code>)。手动点 ↻ 刷新。
                   Hub 上的 polar-agent 每 30s 上报一次 <code>wg show</code> 快照；超过 60s 未上报标记为 <em>stale</em>。
                 </p>
                 <div id="hubStatusGrid" class="wg-status-grid"></div>
