@@ -83,8 +83,13 @@ CREATE TABLE IF NOT EXISTS wg_devices (
     device_id TEXT NOT NULL UNIQUE,
     site_id BIGINT NOT NULL REFERENCES wg_sites(id),
     d_index INT NOT NULL CHECK (d_index BETWEEN 1 AND 254),
-    device_ip TEXT NOT NULL UNIQUE,
-    pubkey TEXT NOT NULL UNIQUE,
+    -- device_ip / pubkey / (site_id,d_index) uniqueness is enforced by the
+    -- PARTIAL indexes below (WHERE removed_at IS NULL), NOT full constraints:
+    -- a soft-removed device must not block reuse of its slot (pickFreeDIndex
+    -- only counts live rows). Full UNIQUE here would 500 every re-register
+    -- into a previously-removed d_index.
+    device_ip TEXT NOT NULL,
+    pubkey TEXT NOT NULL,
     hostname TEXT NOT NULL DEFAULT '',
     os TEXT NOT NULL DEFAULT '',
     arch TEXT NOT NULL DEFAULT '',
@@ -97,9 +102,17 @@ CREATE TABLE IF NOT EXISTS wg_devices (
     hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at TIMESTAMPTZ,
-    removed_at TIMESTAMPTZ,
-    UNIQUE (site_id, d_index)
+    removed_at TIMESTAMPTZ
 );
+-- Migration for DBs created before the partial-unique fix: drop the full
+-- UNIQUE constraints so soft-removed devices stop blocking slot reuse.
+ALTER TABLE wg_devices DROP CONSTRAINT IF EXISTS wg_devices_device_ip_key;
+ALTER TABLE wg_devices DROP CONSTRAINT IF EXISTS wg_devices_pubkey_key;
+ALTER TABLE wg_devices DROP CONSTRAINT IF EXISTS wg_devices_site_id_d_index_key;
+-- Uniqueness scoped to LIVE rows only (matches pickFreeDIndex()).
+CREATE UNIQUE INDEX IF NOT EXISTS wg_devices_device_ip_uq   ON wg_devices(device_ip)        WHERE removed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wg_devices_pubkey_uq      ON wg_devices(pubkey)           WHERE removed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS wg_devices_site_dindex_uq ON wg_devices(site_id, d_index) WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_wg_devices_site ON wg_devices(site_id) WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_wg_devices_token_hash ON wg_devices(token_hash) WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_wg_devices_hub ON wg_devices(hub_id) WHERE removed_at IS NULL;
