@@ -25,6 +25,7 @@ import {
 import { logout } from "@networkextension/polar-ui-common/api/session";
 import { byId } from "@networkextension/polar-ui-common/lib/dom";
 import { hydrateSiteBrand, hydrateSidebarFoot } from "@networkextension/polar-ui-common/lib/site";
+import { mountPlatformNav } from "@networkextension/polar-ui-common/lib/sidebar";
 import { bindThemeSync, initStoredTheme } from "@networkextension/polar-ui-common/lib/theme";
 import type {
   WGBundle,
@@ -44,6 +45,7 @@ byId<HTMLButtonElement>("logoutBtn")?.addEventListener("click", async () => {
   window.location.href = "/login.html";
 });
 void hydrateSiteBrand();
+void mountPlatformNav();
 void hydrateSidebarFoot();
 
 // ---- tabs ----
