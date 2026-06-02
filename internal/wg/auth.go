@@ -28,7 +28,7 @@ func (p *Plugin) requireAdminViaDock() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 			return
 		}
-		res, err := p.Dock.AuthVerify(token)
+		res, err := p.Dock.AuthVerifyWS(token, strings.TrimSpace(c.GetHeader("X-Workspace-Id")))
 		if err != nil {
 			// Dock said no, or dock is unreachable. We can't distinguish
 			// without leaking timing — return 401 either way. Dock-down
