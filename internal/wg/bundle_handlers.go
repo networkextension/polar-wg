@@ -136,6 +136,10 @@ func (p *Plugin) handleAdminWGBundleUpload(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db: " + err.Error()})
 		return
 	}
+	// Dual-write: also register the blob in the central assets catalog so
+	// reads can serve from there. Non-fatal — the local file is the
+	// fallback until backfill + cutover. (logs internally)
+	p.dualWriteBundleAsset(out, finalAbs)
 	if setLatest {
 		if err := p.setWGBundleLatest(out.ID); err != nil {
 			c.JSON(http.StatusOK, gin.H{
@@ -233,6 +237,11 @@ func (p *Plugin) handleWGBundleDownload(c *gin.Context) {
 	}
 	if b == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "version not found"})
+		return
+	}
+	// Dual-read: prefer the central assets catalog; fall back to the local
+	// blob if the bundle hasn't been migrated yet (or assets is down).
+	if p.streamBundleFromAssets(c, b) {
 		return
 	}
 	abs, err := p.resolveWGBundleBlobPath(b)

@@ -113,7 +113,7 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 		return nil, fmt.Errorf("dock /ping rejected: HTTP %d (check PLUGIN_TOKEN + plugin_modules row)", resp.StatusCode)
 	}
 
-	return &Plugin{
+	p := &Plugin{
 		DB:         db,
 		Dock:       dock,
 		Name:       cfg.PluginName,
@@ -123,7 +123,14 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 		MetricsTok: cfg.MetricsToken,
 		metrics:    newWGMetrics(),
 		startedAt:  time.Now(),
-	}, nil
+	}
+	// Assets migration: ensure wg_bundles.asset_id exists (the table
+	// predates the assets catalog). Non-fatal — bundles still serve from
+	// local disk if this fails.
+	if err := p.ensureBundleAssetColumn(); err != nil {
+		log.Printf("wg: ensure asset_id column: %v", err)
+	}
+	return p, nil
 }
 
 // RegisterRoutes attaches the wg plugin's HTTP surface to an existing
@@ -170,6 +177,9 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 		admin.GET("/wg-bundles", p.handleAdminWGBundleList)
 		admin.POST("/wg-bundles/:id/set-latest", p.handleAdminWGBundleSetLatest)
 		admin.DELETE("/wg-bundles/:id", p.handleAdminWGBundleDelete)
+		// Assets migration: upload any local-only bundle blobs into the
+		// central assets catalog + record asset_id (idempotent).
+		admin.POST("/wg-bundles/backfill-assets", p.handleAdminWGBundleBackfillAssets)
 	}
 }
 
