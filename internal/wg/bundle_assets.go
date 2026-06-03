@@ -7,15 +7,24 @@ package wg
 // public (install.sh fetches them unauthenticated).
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
 	sdk "github.com/networkextension/polar-sdk"
 )
+
+// randHex returns 2n lowercase hex chars of CSPRNG output — used to make
+// a unique bundle version label when the operator doesn't supply one.
+func randHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // ensureBundleAssetColumn adds wg_bundles.asset_id if it's missing. The
 // table predates the assets catalog (created in the dock era), so this
@@ -54,7 +63,7 @@ func (p *Plugin) uploadBundleToAssets(b *WGBundle, localAbs string) (int64, erro
 	defer f.Close()
 	meta, err := p.Dock.AssetUpload(sdk.AssetUploadInput{
 		Kind:       "package",
-		Name:       "wg-bundles/" + b.BlobSHA256,
+		Name:       "wg-bundles/" + b.Version,
 		Version:    "v1",
 		Visibility: "public",
 		Mime:       "application/gzip",
@@ -64,20 +73,6 @@ func (p *Plugin) uploadBundleToAssets(b *WGBundle, localAbs string) (int64, erro
 		return 0, err
 	}
 	return meta.ID, nil
-}
-
-// dualWriteBundleAsset uploads a freshly-stored bundle to assets and
-// records its asset_id. Best-effort: a failure is logged but never
-// fails the upload (the local file is the fallback).
-func (p *Plugin) dualWriteBundleAsset(b *WGBundle, localAbs string) {
-	assetID, err := p.uploadBundleToAssets(b, localAbs)
-	if err != nil {
-		log.Printf("wg: bundle %s assets upload failed (kept local): %v", b.Version, err)
-		return
-	}
-	if err := p.setWGBundleAssetID(b.ID, assetID); err != nil {
-		log.Printf("wg: bundle %s set asset_id=%d failed: %v", b.Version, assetID, err)
-	}
 }
 
 // streamBundleFromAssets serves the bundle from the central assets
