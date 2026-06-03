@@ -187,6 +187,7 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 // Returns when ctx is cancelled.
 func (p *Plugin) Start(ctx context.Context) {
 	go p.heartbeatLoop(ctx)
+	go p.backfillBundleAssetsOnce() // self-migrate any local-only bundles to assets
 	p.startWGStaleDeviceGC(ctx)
 	p.startHubStatusPoll(ctx)
 	p.startHubLocalSelfPoll(ctx)
