@@ -11,12 +11,51 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
 	sdk "github.com/networkextension/polar-sdk"
 )
+
+// backfillBundleAssetsOnce migrates any local-only bundle blobs into the
+// central assets catalog on startup. Idempotent: rows that already carry
+// an asset_id are skipped, so after the one-time migration it's a few
+// cheap DB reads and zero dock calls. Run in a goroutine from Start().
+func (p *Plugin) backfillBundleAssetsOnce() {
+	bundles, err := p.listWGBundles()
+	if err != nil {
+		log.Printf("wg: bundle backfill: list: %v", err)
+		return
+	}
+	migrated := 0
+	for i := range bundles {
+		b := &bundles[i]
+		if _, ok, _ := p.getWGBundleAssetID(b.ID); ok {
+			continue
+		}
+		abs, err := p.resolveWGBundleBlobPath(b)
+		if err != nil {
+			log.Printf("wg: bundle backfill: %s: %v (skip)", b.Version, err)
+			continue
+		}
+		assetID, err := p.uploadBundleToAssets(b, abs)
+		if err != nil {
+			log.Printf("wg: bundle backfill: %s: assets upload: %v", b.Version, err)
+			continue
+		}
+		if err := p.setWGBundleAssetID(b.ID, assetID); err != nil {
+			log.Printf("wg: bundle backfill: %s: set asset_id: %v", b.Version, err)
+			continue
+		}
+		migrated++
+		log.Printf("wg: bundle backfill: migrated %s -> asset %d", b.Version, assetID)
+	}
+	if migrated > 0 {
+		log.Printf("wg: bundle backfill: migrated %d bundle(s) to assets", migrated)
+	}
+}
 
 // randHex returns 2n lowercase hex chars of CSPRNG output — used to make
 // a unique bundle version label when the operator doesn't supply one.
