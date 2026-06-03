@@ -2,17 +2,17 @@ package wg
 
 // /api/admin/wg-bundles upload + /v1/bundle download.
 //
-// Mirrors internal/app/dock/rev_firmware_upload.go: content-addressed
-// storage under <uploadDir>/wg-bundles/<sha[:2]>/<sha>, multipart
-// upload with sha256 dedup, file:// download with path confinement.
+// Storage is the central polar-assets catalog (single-write): uploads go
+// straight to assets via the SDK, never to wg-svc-local disk. Legacy
+// rows with a file:// blob_uri still read from local disk until the
+// one-time backfill migrates them. See
+// doc/arch/blob-storage-to-assets-migration.md (polar-dock).
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	sdk "github.com/networkextension/polar-sdk"
 )
 
 func (p *Plugin) wgBundleBlobDirAbs() string {
@@ -34,10 +35,6 @@ func (p *Plugin) wgBundleBlobDirAbs() string {
 //   notes    (optional)
 //   set_latest (optional, "1" to immediately flip is_latest)
 func (p *Plugin) handleAdminWGBundleUpload(c *gin.Context) {
-	if p.UploadDir == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "upload not configured (UPLOAD_DIR unset)"})
-		return
-	}
 	userID, _ := c.Get("user_id")
 	userIDStr, _ := userID.(string)
 
@@ -49,77 +46,55 @@ func (p *Plugin) handleAdminWGBundleUpload(c *gin.Context) {
 	version := strings.TrimSpace(c.PostForm("version"))
 	notes := strings.TrimSpace(c.PostForm("notes"))
 	setLatest := c.PostForm("set_latest") == "1"
-
-	if err := os.MkdirAll(p.wgBundleBlobDirAbs(), 0o755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "mkdir storage: " + err.Error()})
-		return
+	if version == "" {
+		version = time.Now().UTC().Format("20060102") + "-" + randHex(4)
 	}
-	tmp, err := os.CreateTemp(p.wgBundleBlobDirAbs(), "upload-*.part")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "tmp file: " + err.Error()})
-		return
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		if _, err := os.Stat(tmpPath); err == nil {
-			_ = os.Remove(tmpPath)
-		}
-	}()
 
 	src, err := header.Open()
 	if err != nil {
-		_ = tmp.Close()
 		c.JSON(http.StatusBadRequest, gin.H{"error": "open uploaded file: " + err.Error()})
 		return
 	}
-	hasher := sha256.New()
-	w := io.MultiWriter(tmp, hasher)
-	written, err := io.Copy(w, src)
-	_ = src.Close()
-	_ = tmp.Close()
+	defer src.Close()
+
+	// Single-write: stream straight into the central assets catalog. No
+	// wg-svc-local copy — the asset platform owns the bytes. The catalog
+	// key is unique per bundle version; the bytes are content-addressed
+	// (deduped) by sha256 inside assets.
+	meta, err := p.Dock.AssetUpload(sdk.AssetUploadInput{
+		Kind:       "package",
+		Name:       "wg-bundles/" + version,
+		Version:    "v1",
+		Visibility: "public",
+		Mime:       "application/gzip",
+		Metadata:   map[string]any{"wg_bundle_version": version},
+	}, src)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "write: " + err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "assets upload failed: " + err.Error()})
 		return
 	}
-	if written == 0 {
+	if meta.SizeBytes == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
 		return
 	}
-	sum := hex.EncodeToString(hasher.Sum(nil))
+	sum := meta.SHA256
 
-	finalRel := filepath.Join("wg-bundles", sum[:2], sum)
-	finalAbs := filepath.Join(p.UploadDir, finalRel)
-	if err := os.MkdirAll(filepath.Dir(finalAbs), 0o755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "mkdir final: " + err.Error()})
-		return
-	}
-	if _, err := os.Stat(finalAbs); err == nil {
-		_ = os.Remove(tmpPath)
-	} else if err := os.Rename(tmpPath, finalAbs); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "rename: " + err.Error()})
-		return
-	}
-
-	// Dedup check against an existing row by sha256. Upload of the
-	// same blob → 409 with the existing version label.
+	// sha256 dedup at the wg layer (assets already deduped the bytes).
 	if existing, err := p.getWGBundleBySHA(sum); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db: " + err.Error()})
 		return
 	} else if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
-			"error":          "bundle with this sha256 already exists",
-			"existing":       existing,
+			"error":    "bundle with this sha256 already exists",
+			"existing": existing,
 		})
 		return
 	}
-	if version == "" {
-		version = fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102"), sum[:8])
-	}
 	b := &WGBundle{
 		Version:       version,
-		BlobURI:       "file://" + finalAbs,
+		BlobURI:       "asset://" + strconv.FormatInt(meta.ID, 10),
 		BlobSHA256:    sum,
-		SizeBytes:     written,
+		SizeBytes:     meta.SizeBytes,
 		Notes:         notes,
 		AddedByUserID: userIDStr,
 	}
@@ -135,6 +110,9 @@ func (p *Plugin) handleAdminWGBundleUpload(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "db: " + err.Error()})
 		return
+	}
+	if err := p.setWGBundleAssetID(out.ID, meta.ID); err != nil {
+		log.Printf("wg: bundle %s set asset_id=%d: %v", out.Version, meta.ID, err)
 	}
 	if setLatest {
 		if err := p.setWGBundleLatest(out.ID); err != nil {
@@ -233,6 +211,11 @@ func (p *Plugin) handleWGBundleDownload(c *gin.Context) {
 	}
 	if b == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "version not found"})
+		return
+	}
+	// Dual-read: prefer the central assets catalog; fall back to the local
+	// blob if the bundle hasn't been migrated yet (or assets is down).
+	if p.streamBundleFromAssets(c, b) {
 		return
 	}
 	abs, err := p.resolveWGBundleBlobPath(b)
