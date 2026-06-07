@@ -806,6 +806,25 @@ func (p *Plugin) wgDeviceHostIDsByPubkey() (map[string]string, error) {
 	return out, rows.Err()
 }
 
+// linkWGDeviceHostByDeviceIP stamps host_id on the live device with this mesh
+// IP (wg_devices.device_ip). The NE-proof variant of linkWGDeviceHostByPubkey:
+// the agent's mesh IP is readable on every box (ifconfig), unlike the WG
+// pubkey on wg-mac NE clients. Idempotent + additive (IS DISTINCT FROM, never
+// clears). doc/arch/wg-host-crosslink.md.
+func (p *Plugin) linkWGDeviceHostByDeviceIP(deviceIP, hostID string) (int, error) {
+	res, err := p.DB.Exec(
+		`UPDATE wg_devices
+		    SET host_id = $2
+		  WHERE device_ip = $1 AND removed_at IS NULL AND host_id IS DISTINCT FROM $2`,
+		strings.TrimSpace(deviceIP), strings.TrimSpace(hostID),
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (p *Plugin) linkWGDeviceHostByPubkey(pubkey, hostID string) (int, error) {
 	res, err := p.DB.Exec(
 		`UPDATE wg_devices

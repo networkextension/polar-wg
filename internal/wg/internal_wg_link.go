@@ -24,6 +24,10 @@ import (
 type internalWGLinkReq struct {
 	HostID  string   `json:"host_id"`
 	Pubkeys []string `json:"pubkeys"`
+	// DeviceIPs are the agent's mesh IPs (host_info.ipv4_by_iface values).
+	// Used to stamp host_id by wg_devices.device_ip — the NE-proof path,
+	// since wg-mac NE boxes don't expose a readable WG public key.
+	DeviceIPs []string `json:"device_ips"`
 }
 
 func (p *Plugin) handleInternalWGDeviceLink(c *gin.Context) {
@@ -52,6 +56,21 @@ func (p *Plugin) handleInternalWGDeviceLink(c *gin.Context) {
 			// Best-effort: log and keep going. An unknown pubkey (device
 			// not in this hub's DB) is not an error — surface via count.
 			log.Printf("internal/v1/wg-devices/link: pubkey=%s host=%s: %v", pk, hostID, err)
+			continue
+		}
+		linked += n
+	}
+	// NE-proof path: match by the agent's mesh IP against wg_devices.device_ip.
+	// Only the box's mesh IP (10.88.x / 100.64.x) will match a device row;
+	// LAN IPs in the same list simply hit nothing.
+	for _, ip := range req.DeviceIPs {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		n, err := p.linkWGDeviceHostByDeviceIP(ip, hostID)
+		if err != nil {
+			log.Printf("internal/v1/wg-devices/link: device_ip=%s host=%s: %v", ip, hostID, err)
 			continue
 		}
 		linked += n
