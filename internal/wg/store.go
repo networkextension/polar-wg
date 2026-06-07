@@ -25,18 +25,18 @@ import (
 // "bound" when the operator runs install.sh against a role=hub token
 // and that device claims the hub slot (bound_device_id set).
 type WGHub struct {
-	ID             int64      `json:"id"`
-	Slug           string     `json:"slug"`
-	Label          string     `json:"label"`
-	Pubkey         string     `json:"pubkey"`
-	Endpoint       string     `json:"endpoint"`
-	WGIP           string     `json:"wg_ip"`
-	MeshCIDR       string     `json:"mesh_cidr"`
-	KeepaliveSec   int        `json:"keepalive_sec"`
-	RefreshSec     int        `json:"refresh_sec"`
-	BoundDeviceID  *int64     `json:"bound_device_id,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID            int64     `json:"id"`
+	Slug          string    `json:"slug"`
+	Label         string    `json:"label"`
+	Pubkey        string    `json:"pubkey"`
+	Endpoint      string    `json:"endpoint"`
+	WGIP          string    `json:"wg_ip"`
+	MeshCIDR      string    `json:"mesh_cidr"`
+	KeepaliveSec  int       `json:"keepalive_sec"`
+	RefreshSec    int       `json:"refresh_sec"`
+	BoundDeviceID *int64    `json:"bound_device_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Configured iff a device has claimed this hub (pubkey + endpoint set).
@@ -320,8 +320,8 @@ type WGToken struct {
 	Prefix             string     `json:"token_prefix"`
 	Role               string     `json:"role"` // "hub" | "device"
 	HubID              *int64     `json:"hub_id,omitempty"`
-	PublicEndpoint     *string    `json:"public_endpoint,omitempty"`  // hub tokens only
-	MeshCIDRPref       *string    `json:"mesh_cidr_pref,omitempty"`   // hub tokens only
+	PublicEndpoint     *string    `json:"public_endpoint,omitempty"` // hub tokens only
+	MeshCIDRPref       *string    `json:"mesh_cidr_pref,omitempty"`  // hub tokens only
 	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
 	ConsumedAt         *time.Time `json:"consumed_at,omitempty"`
 	ConsumedByDeviceID *int64     `json:"consumed_by_device_id,omitempty"`
@@ -772,6 +772,26 @@ func (p *Plugin) markWGDeviceRemoved(id int64, now time.Time) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// linkWGDeviceHostByPubkey stamps host_id on the live device whose pubkey
+// matches, for the WG→Hosts UI cross-link (doc/arch/wg-host-crosslink.md).
+// Idempotent and additive: only writes when the value differs (so a
+// repeated hello is a no-op) and never clears an existing link with an
+// empty host_id. Returns the number of rows changed (0 when the pubkey is
+// unknown to this hub or already linked).
+func (p *Plugin) linkWGDeviceHostByPubkey(pubkey, hostID string) (int, error) {
+	res, err := p.DB.Exec(
+		`UPDATE wg_devices
+		    SET host_id = $2
+		  WHERE pubkey = $1 AND removed_at IS NULL AND host_id IS DISTINCT FROM $2`,
+		strings.TrimSpace(pubkey), strings.TrimSpace(hostID),
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (p *Plugin) updateWGDeviceTokenHash(id int64, newHash string, expiresAt *time.Time) error {

@@ -159,6 +159,13 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 		v1.GET("/dns/:hub_slug", p.handleWGDNSZone)
 	}
 
+	// /internal/v1/* — loopback-only, posted by dock on the same host.
+	// No HMAC (nginx doesn't proxy /internal/*; handler re-checks loopback).
+	internal := r.Group("/internal/v1")
+	{
+		internal.POST("/wg-devices/link", p.handleInternalWGDeviceLink)
+	}
+
 	// /api/admin/wg-* — admin CRUD, Dock-auth-gated.
 	admin := r.Group("/api/admin", p.requireAdminViaDock())
 	{
