@@ -780,6 +780,32 @@ func (p *Plugin) markWGDeviceRemoved(id int64, now time.Time) error {
 // repeated hello is a no-op) and never clears an existing link with an
 // empty host_id. Returns the number of rows changed (0 when the pubkey is
 // unknown to this hub or already linked).
+// wgDeviceHostIDsByPubkey returns pubkey → host_id for every live device that
+// carries a host_id. Used to enrich the hub-status peer samples (which the
+// live wgctl poll keys only by pubkey) so the UI can deep-link a peer to its
+// polar-hosts host. doc/arch/wg-host-crosslink.md.
+func (p *Plugin) wgDeviceHostIDsByPubkey() (map[string]string, error) {
+	rows, err := p.DB.Query(
+		`SELECT pubkey, host_id FROM wg_devices
+		  WHERE removed_at IS NULL AND host_id <> ''`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var pk, hid string
+		if err := rows.Scan(&pk, &hid); err != nil {
+			return nil, err
+		}
+		if pk = strings.TrimSpace(pk); pk != "" {
+			out[pk] = hid
+		}
+	}
+	return out, rows.Err()
+}
+
 func (p *Plugin) linkWGDeviceHostByPubkey(pubkey, hostID string) (int, error) {
 	res, err := p.DB.Exec(
 		`UPDATE wg_devices
