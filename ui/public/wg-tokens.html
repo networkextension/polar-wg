@@ -64,12 +64,27 @@
               .wg-status-handshake-stale { color: #c0392b; }
               .wg-status-stale-banner { color: var(--warning, #b58900); }
               .wg-status-empty-banner { color: var(--muted, #888); }
+              /* ---- star topology ---- */
+              .topo-wrap { width:100%; }
+              .topo-svg { width:100%; height:auto; max-height:72vh; display:block; }
+              .topo-spoke { stroke-width:1.5; opacity:0.5; }
+              .topo-hublink { stroke-width:3; stroke-dasharray:7 4; opacity:0.95; }
+              .topo-dev circle { stroke: var(--card-bg, #fff); stroke-width:1.5; cursor:pointer; }
+              .topo-dev:hover circle { stroke-width:2.5; }
+              .topo-dev-label { font-size:10px; fill: var(--muted, #888); pointer-events:none; }
+              .topo-hub circle { stroke:#fff; stroke-width:2; cursor:pointer; }
+              .topo-hub-count { font-size:13px; font-weight:700; fill:#fff; pointer-events:none; }
+              .topo-hub-label { font-size:12px; font-weight:600; fill: var(--text, #222); pointer-events:none; }
+              .topo-legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin:4px 0 8px; align-items:center; color: var(--muted,#888); }
+              .topo-legend .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+              .topo-legend .ln { display:inline-block; width:18px; border-top:3px dashed currentColor; margin-right:4px; vertical-align:middle; }
             </style>
             <div class="lp-preview-main">
               <div class="lp-preview-head">
                 <span class="badge">Hub 实时状态</span>
                 <span id="hubStatusSummary" class="lp-mode-badge">—</span>
                 <span style="flex:1;"></span>
+                <button id="hubViewToggle" class="btn-inline btn-secondary" type="button">▤ 列表</button>
                 <button id="hubStatusRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
               </div>
               <div class="lp-preview-body">
@@ -77,7 +92,17 @@
                   来源：dock 缓存 (<code>GET /internal/v1/wg-peer-status</code>)。手动点 ↻ 刷新。
                   Hub 上的 polar-agent 每 30s 上报一次 <code>wg show</code> 快照；超过 60s 未上报标记为 <em>stale</em>。
                 </p>
-                <div id="hubStatusGrid" class="wg-status-grid"></div>
+                <div id="hubTopologyWrap" class="topo-wrap">
+                  <div class="topo-legend">
+                    <span><span class="dot" style="background:#3a6df0;"></span>Hub</span>
+                    <span><span class="dot" style="background:#2a8a2a;"></span>设备(在线)</span>
+                    <span><span class="dot" style="background:#b58900;"></span>设备(&gt;1min)</span>
+                    <span><span class="dot" style="background:#c0392b;"></span>设备(掉线)</span>
+                    <span style="color:#3a6df0;"><span class="ln"></span>Hub 互联</span>
+                  </div>
+                  <div id="hubTopology"></div>
+                </div>
+                <div id="hubStatusGrid" class="wg-status-grid" hidden></div>
                 <div id="hubStatusEmpty" class="meta-subtitle" hidden>暂无 hub。先去 🔑 Tokens 创建一个 role=hub token。</div>
               </div>
             </div>
