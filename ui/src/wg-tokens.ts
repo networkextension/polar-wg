@@ -98,6 +98,11 @@ const hubStatusGrid = byId<HTMLElement>("hubStatusGrid");
 const hubStatusEmpty = byId<HTMLElement>("hubStatusEmpty");
 const hubStatusSummary = byId<HTMLElement>("hubStatusSummary");
 const hubStatusRefreshBtn = byId<HTMLButtonElement>("hubStatusRefreshBtn");
+const hubTopology = byId<HTMLElement>("hubTopology");
+const hubTopologyWrap = byId<HTMLElement>("hubTopologyWrap");
+const hubViewToggle = byId<HTMLButtonElement>("hubViewToggle");
+// Star-topology is the default view; the toggle flips to the legacy card list.
+let topoView = true;
 
 function esc(s: string): string {
   return s
@@ -295,19 +300,131 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
   return card;
 }
 
+// ---- Star topology (SVG) ----
+
+function handshakeColor(ageSec?: number): string {
+  if (ageSec === undefined || ageSec === null) return "#9aa0a6"; // never
+  if (ageSec < 60) return "#2a8a2a"; // fresh
+  if (ageSec < 300) return "#b58900"; // warn
+  return "#c0392b"; // stale
+}
+
+type Pt = { x: number; y: number };
+
+// renderTopology draws a star-of-stars: each hub is a star center, its live
+// peers fan out as device spokes (colored by handshake freshness), and any
+// peer whose pubkey matches ANOTHER hub is drawn as a hub↔hub interconnect.
+function renderTopology(rows: WGHubStatusRow[]): string {
+  const hubByPubkey = new Map<string, WGHubStatusRow>();
+  rows.forEach((r) => {
+    if (r.pubkey) hubByPubkey.set(r.pubkey, r);
+  });
+
+  const N = rows.length;
+  const W = 1000;
+  const H = N <= 1 ? 560 : Math.max(640, 380 + N * 40);
+  const cx = W / 2;
+  const cy = H / 2;
+  const hubRing = N > 1 ? Math.min(W, H) * 0.3 : 0;
+
+  const hubPos = new Map<number, Pt>();
+  rows.forEach((r, i) => {
+    const a = ((-90 + (360 * i) / N) * Math.PI) / 180;
+    hubPos.set(r.id, { x: cx + Math.cos(a) * hubRing, y: cy + Math.sin(a) * hubRing });
+  });
+
+  const hubLinks: string[] = [];
+  const spokes: string[] = [];
+  const devNodes: string[] = [];
+  const hubNodes: string[] = [];
+  const seenLink = new Set<string>();
+
+  rows.forEach((r) => {
+    const hp = hubPos.get(r.id);
+    if (!hp) return;
+    const peers = r.status?.peers ?? [];
+    const interHub = peers.filter(
+      (p) => p.public_key && hubByPubkey.has(p.public_key) && p.public_key !== r.pubkey,
+    );
+    const devicePeers = peers.filter(
+      (p) => !p.public_key || !hubByPubkey.has(p.public_key) || p.public_key === r.pubkey,
+    );
+
+    // hub ↔ hub interconnect links (dedup A-B / B-A)
+    interHub.forEach((p) => {
+      const other = hubByPubkey.get(p.public_key!);
+      if (!other) return;
+      const key = [r.id, other.id].sort((a, b) => a - b).join("-");
+      if (seenLink.has(key)) return;
+      seenLink.add(key);
+      const op = hubPos.get(other.id);
+      if (!op) return;
+      hubLinks.push(
+        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${op.x.toFixed(1)}" y2="${op.y.toFixed(1)}" class="topo-hublink" stroke="${handshakeColor(p.handshake_age_sec)}"><title>${esc(r.slug)} ↔ ${esc(other.slug)}</title></line>`,
+      );
+    });
+
+    // device spokes fan outward from the hub
+    const M = devicePeers.length;
+    const outward = N > 1 ? Math.atan2(hp.y - cy, hp.x - cx) : -Math.PI / 2;
+    const spokeR = Math.min(240, 95 + M * 5);
+    const arc = N > 1 ? Math.PI * 1.25 : Math.PI * 2;
+    devicePeers.forEach((p, j) => {
+      const a =
+        N > 1
+          ? outward + (M === 1 ? 0 : (j / (M - 1) - 0.5) * arc)
+          : (2 * Math.PI * j) / Math.max(1, M) - Math.PI / 2;
+      const dp = { x: hp.x + Math.cos(a) * spokeR, y: hp.y + Math.sin(a) * spokeR };
+      const col = handshakeColor(p.handshake_age_sec);
+      const name = (p.public_key && pubkeyToName.get(p.public_key)) || truncPubkey(p.public_key);
+      const hs = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
+      const tip = `${name}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}`;
+      spokes.push(
+        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}"/>`,
+      );
+      const lx = dp.x + Math.cos(a) * 10;
+      const ly = dp.y + Math.sin(a) * 10 + 3;
+      const anchor = Math.cos(a) < -0.25 ? "end" : Math.cos(a) > 0.25 ? "start" : "middle";
+      devNodes.push(
+        `<g class="topo-dev"><circle cx="${dp.x.toFixed(1)}" cy="${dp.y.toFixed(1)}" r="6" fill="${col}"><title>${esc(tip)}</title></circle><text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="topo-dev-label">${esc(name)}</text></g>`,
+      );
+    });
+
+    // hub node on top
+    const peerCount = r.status?.peer_count ?? peers.length;
+    const fill = !r.status ? "#9aa0a6" : r.status.stale ? "#c0392b" : "#3a6df0";
+    const htip = `${r.label || r.slug}\n${r.endpoint || "no endpoint"}\nwg ${r.wg_ip || "—"}\n${peerCount} peers${r.status?.stale ? " (stale)" : ""}`;
+    hubNodes.push(
+      `<g class="topo-hub"><circle cx="${hp.x.toFixed(1)}" cy="${hp.y.toFixed(1)}" r="22" fill="${fill}"><title>${esc(htip)}</title></circle><text x="${hp.x.toFixed(1)}" y="${(hp.y + 5).toFixed(1)}" text-anchor="middle" class="topo-hub-count">${peerCount}</text><text x="${hp.x.toFixed(1)}" y="${(hp.y + 40).toFixed(1)}" text-anchor="middle" class="topo-hub-label">${esc(r.label || r.slug)}</text></g>`,
+    );
+  });
+
+  return `<svg viewBox="0 0 ${W} ${H}" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="WG mesh topology">${hubLinks.join("")}${spokes.join("")}${devNodes.join("")}${hubNodes.join("")}</svg>`;
+}
+
+function applyStatusView(): void {
+  if (hubStatusGrid) hubStatusGrid.hidden = topoView;
+  if (hubTopologyWrap) hubTopologyWrap.hidden = !topoView;
+  if (hubViewToggle) hubViewToggle.textContent = topoView ? "▤ 列表" : "🌐 拓扑";
+}
+
 async function refreshStatus(): Promise<void> {
   if (!hubStatusGrid) return;
   try {
     const { data } = await listWGHubStatus();
     const rows: WGHubStatusRow[] = data.hubs ?? [];
     hubStatusGrid.innerHTML = "";
+    if (hubTopology) hubTopology.innerHTML = "";
     if (rows.length === 0) {
       if (hubStatusEmpty) hubStatusEmpty.hidden = false;
+      if (hubTopologyWrap) hubTopologyWrap.hidden = true;
       if (hubStatusSummary) hubStatusSummary.textContent = "no hubs";
       return;
     }
     if (hubStatusEmpty) hubStatusEmpty.hidden = true;
     rows.forEach((r: WGHubStatusRow) => hubStatusGrid.appendChild(renderHubCard(r)));
+    if (hubTopology) hubTopology.innerHTML = renderTopology(rows);
+    applyStatusView();
     const reported = rows.filter((r: WGHubStatusRow) => r.status !== null).length;
     const stale = rows.filter((r: WGHubStatusRow) => r.status?.stale === true).length;
     const summary =
@@ -321,6 +438,10 @@ async function refreshStatus(): Promise<void> {
 }
 
 hubStatusRefreshBtn?.addEventListener("click", () => void refreshStatus());
+hubViewToggle?.addEventListener("click", () => {
+  topoView = !topoView;
+  applyStatusView();
+});
 
 // ---- shared state ----
 
