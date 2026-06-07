@@ -102,7 +102,9 @@ CREATE TABLE IF NOT EXISTS wg_devices (
     hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at TIMESTAMPTZ,
-    removed_at TIMESTAMPTZ
+    removed_at TIMESTAMPTZ,
+    -- soft ref to polar-hosts host.id (UI cross-link only; no FK across plugins)
+    host_id TEXT NOT NULL DEFAULT ''
 );
 -- Migration for DBs created before the partial-unique fix: drop the full
 -- UNIQUE constraints so soft-removed devices stop blocking slot reuse.
@@ -116,6 +118,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS wg_devices_site_dindex_uq ON wg_devices(site_i
 CREATE INDEX IF NOT EXISTS ix_wg_devices_site ON wg_devices(site_id) WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_wg_devices_token_hash ON wg_devices(token_hash) WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_wg_devices_hub ON wg_devices(hub_id) WHERE removed_at IS NULL;
+-- Soft ref to polar-hosts host.id for UI cross-linking (added 2026-06-07).
+ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS host_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS ix_wg_devices_host_id ON wg_devices(host_id) WHERE host_id <> '';
 
 CREATE TABLE IF NOT EXISTS wg_bundles (
     id BIGSERIAL PRIMARY KEY,

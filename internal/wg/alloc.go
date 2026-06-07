@@ -24,6 +24,7 @@ type wgRegisterInput struct {
 	Token        string
 	Pubkey       string
 	Hostname     string
+	HostID       string // optional: polar-hosts host.id, for UI cross-link
 	OS           string
 	Arch         string
 	AgentVer     string
@@ -138,11 +139,13 @@ func (p *Plugin) refreshExistingDevice(tx *sql.Tx, existing *WGDevice, in wgRegi
 	if _, err := tx.Exec(
 		`UPDATE wg_devices
 		    SET hostname = $2, os = $3, arch = $4, agent_ver = $5,
-		        lan_addrs_json = $6, wg_listen_port = $7
+		        lan_addrs_json = $6, wg_listen_port = $7,
+		        host_id = COALESCE(NULLIF($8,''), host_id)
 		  WHERE id = $1`,
 		existing.ID,
 		strings.TrimSpace(in.Hostname), strings.TrimSpace(in.OS), strings.TrimSpace(in.Arch),
 		strings.TrimSpace(in.AgentVer), nullJSONB(lanJSON), in.WGListenPort,
+		strings.TrimSpace(in.HostID),
 	); err != nil {
 		return nil, err
 	}
@@ -196,12 +199,12 @@ func (p *Plugin) bindHubDevice(tx *sql.Tx, in wgRegisterInput, tok *WGToken, hub
 	err = tx.QueryRow(
 		`INSERT INTO wg_devices (
 		    device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver,
-		    wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		    wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, host_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		 RETURNING id`,
 		deviceID, hub.ID, site.ID, 1, deviceIP, strings.TrimSpace(in.Pubkey),
 		strings.TrimSpace(in.Hostname), strings.TrimSpace(in.OS), strings.TrimSpace(in.Arch), strings.TrimSpace(in.AgentVer),
-		in.WGListenPort, nullJSONB(lanJSON), endpoint, tokenHash, tok.ExpiresAt, now,
+		in.WGListenPort, nullJSONB(lanJSON), endpoint, tokenHash, tok.ExpiresAt, now, strings.TrimSpace(in.HostID),
 	).Scan(&newID)
 	if err != nil {
 		return nil, err
@@ -267,12 +270,12 @@ func (p *Plugin) allocateDevice(tx *sql.Tx, in wgRegisterInput, tok *WGToken, hu
 	err = tx.QueryRow(
 		`INSERT INTO wg_devices (
 		    device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver,
-		    wg_listen_port, lan_addrs_json, token_hash, token_expires_at, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		    wg_listen_port, lan_addrs_json, token_hash, token_expires_at, created_at, host_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		 RETURNING id`,
 		deviceID, hub.ID, site.ID, dIndex, deviceIP, strings.TrimSpace(in.Pubkey),
 		strings.TrimSpace(in.Hostname), strings.TrimSpace(in.OS), strings.TrimSpace(in.Arch), strings.TrimSpace(in.AgentVer),
-		in.WGListenPort, nullJSONB(lanJSON), tokenHash, tok.ExpiresAt, now,
+		in.WGListenPort, nullJSONB(lanJSON), tokenHash, tok.ExpiresAt, now, strings.TrimSpace(in.HostID),
 	).Scan(&newID)
 	if err != nil {
 		return nil, err
