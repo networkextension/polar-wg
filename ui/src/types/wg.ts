@@ -60,6 +60,7 @@ export type WGDevice = {
   device_ip: string;
   pubkey: string;
   hostname: string;
+  host_id?: string; // soft ref to polar-hosts host.id (UI cross-link)
   os: string;
   arch: string;
   agent_ver: string;
