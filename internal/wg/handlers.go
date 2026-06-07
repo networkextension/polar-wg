@@ -51,6 +51,7 @@ type wgRegisterRequest struct {
 	Token    string      `json:"token" binding:"required"`
 	Pubkey   string      `json:"pubkey" binding:"required"`
 	Hostname string      `json:"hostname"`
+	HostID   string      `json:"host_id"` // optional: polar-hosts host.id, for UI cross-link
 	OS       string      `json:"os"`
 	Arch     string      `json:"arch"`
 	AgentVer string      `json:"agent_ver"`
@@ -105,6 +106,7 @@ func (p *Plugin) handleWGRegister(c *gin.Context) {
 		Token:        req.Token,
 		Pubkey:       req.Pubkey,
 		Hostname:     req.Hostname,
+		HostID:       req.HostID,
 		OS:           req.OS,
 		Arch:         req.Arch,
 		AgentVer:     req.AgentVer,
