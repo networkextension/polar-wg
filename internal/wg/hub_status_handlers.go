@@ -48,6 +48,14 @@ func (p *Plugin) handleAdminWGHubStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
+	// pubkey → host_id for live devices, so each hub-status peer (keyed only
+	// by pubkey from the live wgctl poll) can carry a host_id for the
+	// WG→Hosts UI deep-link. Best-effort: a DB blip just leaves peers
+	// without host_id rather than failing the whole status call.
+	hostIDByPubkey, err := p.wgDeviceHostIDsByPubkey()
+	if err != nil {
+		hostIDByPubkey = nil
+	}
 	out := wgHubStatusResponse{Hubs: make([]wgHubStatusRow, 0, len(hubs))}
 	for _, h := range hubs {
 		row := wgHubStatusRow{
@@ -61,6 +69,7 @@ func (p *Plugin) handleAdminWGHubStatus(c *gin.Context) {
 		if p.hubStatus != nil && h.Pubkey != "" {
 			if sample, ok, stale := p.hubStatus.lookup(h.Pubkey); ok {
 				row.Status = buildHubStatusEntry(sample, stale)
+				enrichPeersWithHostID(row.Status, hostIDByPubkey)
 			}
 		}
 		out.Hubs = append(out.Hubs, row)
@@ -105,6 +114,29 @@ func buildHubStatusEntry(s wgHubStatusSample, stale bool) *wgHubStatusEntry {
 		out.Extra = extra
 	}
 	return out
+}
+
+// enrichPeersWithHostID stamps host_id onto each peer map (keyed by its
+// public_key) so the topology / device list can deep-link a live peer to its
+// polar-hosts host without a second client-side join. No-op when the map is
+// empty or a peer's pubkey has no linked device. doc/arch/wg-host-crosslink.md.
+func enrichPeersWithHostID(entry *wgHubStatusEntry, hostIDByPubkey map[string]string) {
+	if entry == nil || len(hostIDByPubkey) == 0 {
+		return
+	}
+	for _, raw := range entry.Peers {
+		peer, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		pk, _ := peer["public_key"].(string)
+		if pk == "" {
+			continue
+		}
+		if hid, found := hostIDByPubkey[pk]; found && hid != "" {
+			peer["host_id"] = hid
+		}
+	}
 }
 
 func numFromAny(v any) (float64, bool) {
