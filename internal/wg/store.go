@@ -577,6 +577,7 @@ type WGDevice struct {
 	DeviceIP       string      `json:"device_ip"`
 	Pubkey         string      `json:"pubkey"`
 	Hostname       string      `json:"hostname"`
+	HostID         string      `json:"host_id,omitempty"` // soft ref to polar-hosts host.id (UI cross-link)
 	OS             string      `json:"os"`
 	Arch           string      `json:"arch"`
 	AgentVer       string      `json:"agent_ver"`
@@ -602,7 +603,7 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 	dest := []any{
 		&d.ID, &d.DeviceID, &d.HubID, &d.SiteID, &d.DIndex, &d.DeviceIP, &d.Pubkey,
 		&d.Hostname, &d.OS, &d.Arch, &d.AgentVer, &d.WGListenPort, &lanJSON, &d.WGEndpoint,
-		&d.TokenHash, &tokenExpiresAt, &d.CreatedAt, &lastSeenAt, &removedAt,
+		&d.TokenHash, &tokenExpiresAt, &d.CreatedAt, &lastSeenAt, &removedAt, &d.HostID,
 	}
 	if hasSlug {
 		dest = append(dest, &siteSlug, &hubSlug)
@@ -636,7 +637,7 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 	return &d, nil
 }
 
-const wgDeviceColumns = `id, device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver, wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, last_seen_at, removed_at`
+const wgDeviceColumns = `id, device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver, wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, last_seen_at, removed_at, host_id`
 
 func (p *Plugin) getWGDeviceByID(id int64) (*WGDevice, error) {
 	row := p.DB.QueryRow(`SELECT `+wgDeviceColumns+` FROM wg_devices WHERE id = $1`, id)
@@ -683,7 +684,7 @@ func (p *Plugin) listWGDevices(includeRemoved bool) ([]WGDevice, error) {
 	q := `SELECT d.id, d.device_id, d.hub_id, d.site_id, d.d_index, d.device_ip, d.pubkey,
 	             d.hostname, d.os, d.arch, d.agent_ver, d.wg_listen_port, d.lan_addrs_json,
 	             d.wg_endpoint, d.token_hash, d.token_expires_at, d.created_at, d.last_seen_at,
-	             d.removed_at, s.slug, h.slug
+	             d.removed_at, d.host_id, s.slug, h.slug
 	        FROM wg_devices d
 	   LEFT JOIN wg_sites s ON s.id = d.site_id
 	   LEFT JOIN wg_hubs  h ON h.id = d.hub_id`

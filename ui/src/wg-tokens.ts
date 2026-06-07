@@ -137,12 +137,22 @@ function truncPubkey(k?: string): string {
 // devices list (e.g. a hub-side leftover or a freshly joined client
 // that hasn't been listed yet).
 const pubkeyToName = new Map<string, string>();
+const pubkeyToHostID = new Map<string, string>();
+
+// Cross-link to the polar-hosts module's detail page. Derives the hosts host
+// from the current origin (wg.<env> → hosts.<env>) so it works in prod + dev,
+// matching the platform-nav absolute-URL convention.
+function hostsLinkURL(hostId: string): string {
+  const host = location.host.replace(/^wg\./, "hosts.");
+  return `${location.protocol}//${host}/hosts.html?id=${encodeURIComponent(hostId)}`;
+}
 
 async function primePubkeyMap(): Promise<void> {
   try {
     const { data } = await listWGDevices(false);
     for (const d of data.devices ?? []) {
       if (d.pubkey && d.hostname) pubkeyToName.set(d.pubkey, d.hostname);
+      if (d.pubkey && d.host_id) pubkeyToHostID.set(d.pubkey, d.host_id);
     }
     // Re-render status if it's already mounted, now that names exist.
     if (!byId<HTMLElement>("paneStatus")?.hidden) void refreshStatus();
@@ -377,17 +387,17 @@ function renderTopology(rows: WGHubStatusRow[]): string {
       const dp = { x: hp.x + Math.cos(a) * spokeR, y: hp.y + Math.sin(a) * spokeR };
       const col = handshakeColor(p.handshake_age_sec);
       const name = (p.public_key && pubkeyToName.get(p.public_key)) || truncPubkey(p.public_key);
+      const hostID = p.public_key ? pubkeyToHostID.get(p.public_key) : undefined;
       const hs = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
-      const tip = `${name}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}`;
+      const tip = `${name}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
       spokes.push(
         `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}"/>`,
       );
       const lx = dp.x + Math.cos(a) * 10;
       const ly = dp.y + Math.sin(a) * 10 + 3;
       const anchor = Math.cos(a) < -0.25 ? "end" : Math.cos(a) > 0.25 ? "start" : "middle";
-      devNodes.push(
-        `<g class="topo-dev"><circle cx="${dp.x.toFixed(1)}" cy="${dp.y.toFixed(1)}" r="6" fill="${col}"><title>${esc(tip)}</title></circle><text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="topo-dev-label">${esc(name)}</text></g>`,
-      );
+      const node = `<g class="topo-dev"><circle cx="${dp.x.toFixed(1)}" cy="${dp.y.toFixed(1)}" r="6" fill="${col}"><title>${esc(tip)}</title></circle><text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="topo-dev-label">${esc(name)}</text></g>`;
+      devNodes.push(hostID ? `<a href="${hostsLinkURL(hostID)}" target="_top">${node}</a>` : node);
     });
 
     // hub node on top
@@ -841,9 +851,12 @@ function deviceStatus(dev: WGDevice): string {
 function renderDeviceRow(dev: WGDevice): HTMLTableRowElement {
   const tr = document.createElement("tr");
   if (dev.removed_at) tr.style.opacity = "0.5";
+  const hostnameCell = dev.host_id
+    ? `<a href="${hostsLinkURL(dev.host_id)}" title="在 Hosts 模块查看该主机">${esc(dev.hostname || dev.host_id)}</a>`
+    : esc(dev.hostname || "—");
   const cells: string[] = [
     `<code style="font-size:11px;">${dev.device_id}</code>`,
-    dev.hostname || "—",
+    hostnameCell,
     dev.hub_slug || `#${dev.hub_id}`,
     dev.site_slug || `#${dev.site_id}`,
     `<code>${dev.device_ip}</code>`,
