@@ -72,9 +72,55 @@ func (p *Plugin) handleAdminWGHubStatus(c *gin.Context) {
 				enrichPeersWithHostID(row.Status, hostIDByPubkey)
 			}
 		}
+		// No live wgctl poll for this hub (only the hub that wg-svc runs on
+		// self-polls). Fall back to the registered roster so the topology still
+		// draws this hub's client devices — handshake unknown ("never"), since
+		// this is membership, not liveness.
+		if row.Status == nil {
+			if rs := p.rosterStatusForHub(h); rs != nil {
+				enrichPeersWithHostID(rs, hostIDByPubkey)
+				row.Status = rs
+			}
+		}
 		out.Hubs = append(out.Hubs, row)
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// rosterStatusForHub synthesizes a status entry from the hub's REGISTERED
+// devices (wg_devices) when no live wgctl poll exists for it. Peers carry
+// pubkey + wg_ip + endpoint but NO handshake_age_sec, so the UI draws them as
+// gray "never" spokes — present-but-unverified. The hub's own bound device
+// (pubkey == hub pubkey) is skipped (it's the star center, not a spoke).
+func (p *Plugin) rosterStatusForHub(h WGHub) *wgHubStatusEntry {
+	devs, err := p.listWGDevicesInHub(h.ID, 0)
+	if err != nil || len(devs) == 0 {
+		return nil
+	}
+	peers := make([]any, 0, len(devs))
+	for _, d := range devs {
+		if d.Pubkey == "" || d.Pubkey == h.Pubkey {
+			continue
+		}
+		peer := map[string]any{"public_key": d.Pubkey}
+		if d.DeviceIP != "" {
+			peer["wg_ip"] = d.DeviceIP
+		}
+		if d.WGEndpoint != "" {
+			peer["endpoint"] = d.WGEndpoint
+		}
+		peers = append(peers, peer)
+	}
+	if len(peers) == 0 {
+		return nil
+	}
+	return &wgHubStatusEntry{
+		Iface:     "wgc0",
+		Stale:     true, // roster-derived, not a live poll
+		PeerCount: len(peers),
+		Peers:     peers,
+		Extra:     map[string]any{"source": "roster"},
+	}
 }
 
 // buildHubStatusEntry pulls the well-known peer-status fields out of
