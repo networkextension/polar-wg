@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS wg_hubs (
 CREATE TABLE IF NOT EXISTS wg_sites (
     id BIGSERIAL PRIMARY KEY,
     slug TEXT UNIQUE NOT NULL,
-    s_index INT UNIQUE NOT NULL CHECK (s_index BETWEEN 0 AND 254),
+    -- s_index is unique PER HUB (see wg_sites_hub_sindex_uq below), NOT globally:
+    -- every hub's "<hub>:hub" site sits at s_index=0, so a global UNIQUE rejects
+    -- the 2nd hub. Kept un-inlined here; the scoped index is created post-table.
+    s_index INT NOT NULL CHECK (s_index BETWEEN 0 AND 254),
     label TEXT NOT NULL DEFAULT '',
     public_ip TEXT NOT NULL DEFAULT '',
     lan_cidr TEXT NOT NULL DEFAULT '',
@@ -147,3 +150,13 @@ CREATE TABLE IF NOT EXISTS wg_heartbeats (
 );
 CREATE INDEX IF NOT EXISTS ix_wg_heartbeats_device_ts
     ON wg_heartbeats(device_id, received_at DESC);
+
+-- ── 2026-06-09 fix: s_index is unique PER HUB, not globally ─────────────────
+-- The original table inlined `s_index INT UNIQUE`, but the Phase-2 multi-hub
+-- allocator (pickFreeSIndexInHub / pickFreeDIndex) scopes every index to a hub.
+-- Each hub's "<hub>:hub" site is created at s_index=0, so the global UNIQUE
+-- rejected the SECOND hub's registration with
+--   duplicate key value violates unique constraint "wg_sites_s_index_key"
+-- → 500 from /v1/register. Drop the global constraint, re-scope to (hub_id, s_index).
+ALTER TABLE wg_sites DROP CONSTRAINT IF EXISTS wg_sites_s_index_key;
+CREATE UNIQUE INDEX IF NOT EXISTS wg_sites_hub_sindex_uq ON wg_sites(hub_id, s_index);
