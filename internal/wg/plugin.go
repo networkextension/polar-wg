@@ -130,6 +130,10 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 	if err := p.ensureBundleAssetColumn(); err != nil {
 		log.Printf("wg: ensure asset_id column: %v", err)
 	}
+	// Per-platform bundles: ensure wg_bundles.os/arch + per-(os,arch) latest.
+	if err := p.ensureBundleOSArchColumns(); err != nil {
+		log.Printf("wg: ensure os/arch columns: %v", err)
+	}
 	return p, nil
 }
 

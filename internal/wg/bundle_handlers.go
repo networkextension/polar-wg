@@ -46,6 +46,13 @@ func (p *Plugin) handleAdminWGBundleUpload(c *gin.Context) {
 	version := strings.TrimSpace(c.PostForm("version"))
 	notes := strings.TrimSpace(c.PostForm("notes"))
 	setLatest := c.PostForm("set_latest") == "1"
+	// Platform of this bundle (packaging is polar-wg-app's job; we just tag it).
+	// Default darwin/'' keeps the original macOS-only upload flow working.
+	bundleOS := normWGOS(c.PostForm("os"))
+	if bundleOS == "" {
+		bundleOS = "darwin"
+	}
+	bundleArch := normWGArch(c.PostForm("arch"))
 	if version == "" {
 		version = time.Now().UTC().Format("20060102") + "-" + randHex(4)
 	}
@@ -92,6 +99,8 @@ func (p *Plugin) handleAdminWGBundleUpload(c *gin.Context) {
 	}
 	b := &WGBundle{
 		Version:       version,
+		OS:            bundleOS,
+		Arch:          bundleArch,
 		BlobURI:       "asset://" + strconv.FormatInt(meta.ID, 10),
 		BlobSHA256:    sum,
 		SizeBytes:     meta.SizeBytes,
@@ -185,17 +194,37 @@ func (p *Plugin) handleAdminWGBundleDelete(c *gin.Context) {
 // time. Bundle contents are public; the join secret is the --token=
 // arg the operator passes to the script.
 
+// reqOSArch reads + normalizes the ?os=/&arch= query params (OS defaults to
+// darwin so the original macOS bundles resolve with no params).
+func reqOSArch(c *gin.Context) (os, arch string) {
+	os = normWGOS(c.Query("os"))
+	if os == "" {
+		os = "darwin"
+	}
+	return os, normWGArch(c.Query("arch"))
+}
+
 func (p *Plugin) handleWGBundleLatest(c *gin.Context) {
-	latest, err := p.getLatestWGBundle()
+	os, arch := reqOSArch(c)
+	latest, err := p.getLatestWGBundleFor(os, arch)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
 	if latest == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "no latest bundle configured — admin must upload + mark latest"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no latest bundle for %s/%s — admin must upload + mark latest", os, archOrAny(arch))})
 		return
 	}
-	c.Redirect(http.StatusFound, "/v1/bundle/"+latest.Version)
+	// Preserve the platform on the redirect so the versioned download resolves
+	// the same (os, arch) bundle.
+	c.Redirect(http.StatusFound, fmt.Sprintf("/v1/bundle/%s?os=%s&arch=%s", latest.Version, os, latest.Arch))
+}
+
+func archOrAny(a string) string {
+	if a == "" {
+		return "any"
+	}
+	return a
 }
 
 func (p *Plugin) handleWGBundleDownload(c *gin.Context) {
@@ -204,13 +233,14 @@ func (p *Plugin) handleWGBundleDownload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "version required"})
 		return
 	}
-	b, err := p.getWGBundleByVersion(version)
+	os, arch := reqOSArch(c)
+	b, err := p.getWGBundleForVersion(version, os, arch)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
 	if b == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "version not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no bundle %s for %s/%s", version, os, archOrAny(arch))})
 		return
 	}
 	// Dual-read: prefer the central assets catalog; fall back to the local
@@ -225,8 +255,18 @@ func (p *Plugin) handleWGBundleDownload(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	c.Header("Content-Type", "application/gzip")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="wg-mac-%s.tar.gz"`, sanitizeFilename(b.Version)))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, bundleFilename(b)))
 	c.File(abs)
+}
+
+// bundleFilename names the download by platform, e.g. wg-darwin-arm64-<ver>.tar.gz
+// (arch omitted when universal).
+func bundleFilename(b *WGBundle) string {
+	mid := b.OS
+	if b.Arch != "" {
+		mid += "-" + b.Arch
+	}
+	return fmt.Sprintf("wg-%s-%s.tar.gz", mid, sanitizeFilename(b.Version))
 }
 
 // resolveWGBundleBlobPath canonicalizes the row's file:// URI and

@@ -877,6 +877,8 @@ func (p *Plugin) otherSiteIndicesInHub(hubID, excludeSiteID int64) ([]int, error
 type WGBundle struct {
 	ID            int64     `json:"id"`
 	Version       string    `json:"version"`
+	OS            string    `json:"os"`   // darwin|linux|windows; packaging is polar-wg-app's job
+	Arch          string    `json:"arch"` // amd64|arm64, or "" = universal/any
 	BlobURI       string    `json:"blob_uri"`
 	BlobSHA256    string    `json:"blob_sha256"`
 	SizeBytes     int64     `json:"size_bytes"`
@@ -886,87 +888,91 @@ type WGBundle struct {
 	AddedByUserID string    `json:"added_by_user_id"`
 }
 
+// wgBundleCols / scanWGBundle keep the column list in one place so the os/arch
+// columns stay in sync across every getter.
+const wgBundleCols = `id, version, os, arch, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id`
+
+func scanWGBundle(s interface{ Scan(...any) error }) (*WGBundle, error) {
+	var b WGBundle
+	if err := s.Scan(&b.ID, &b.Version, &b.OS, &b.Arch, &b.BlobURI, &b.BlobSHA256, &b.SizeBytes, &b.IsLatest, &b.Notes, &b.AddedAt, &b.AddedByUserID); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
 func (p *Plugin) listWGBundles() ([]WGBundle, error) {
-	rows, err := p.DB.Query(
-		`SELECT id, version, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id
-		   FROM wg_bundles ORDER BY added_at DESC, id DESC`,
-	)
+	rows, err := p.DB.Query(`SELECT ` + wgBundleCols + ` FROM wg_bundles ORDER BY added_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := make([]WGBundle, 0)
 	for rows.Next() {
-		var b WGBundle
-		if err := rows.Scan(&b.ID, &b.Version, &b.BlobURI, &b.BlobSHA256, &b.SizeBytes, &b.IsLatest, &b.Notes, &b.AddedAt, &b.AddedByUserID); err != nil {
+		b, err := scanWGBundle(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, b)
+		out = append(out, *b)
 	}
 	return out, rows.Err()
 }
 
 func (p *Plugin) getWGBundleByID(id int64) (*WGBundle, error) {
-	var b WGBundle
-	err := p.DB.QueryRow(
-		`SELECT id, version, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id
-		   FROM wg_bundles WHERE id = $1`,
-		id,
-	).Scan(&b.ID, &b.Version, &b.BlobURI, &b.BlobSHA256, &b.SizeBytes, &b.IsLatest, &b.Notes, &b.AddedAt, &b.AddedByUserID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
+	b, err := scanWGBundle(p.DB.QueryRow(`SELECT `+wgBundleCols+` FROM wg_bundles WHERE id = $1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	return &b, nil
-}
-
-func (p *Plugin) getWGBundleByVersion(version string) (*WGBundle, error) {
-	var b WGBundle
-	err := p.DB.QueryRow(
-		`SELECT id, version, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id
-		   FROM wg_bundles WHERE version = $1`,
-		version,
-	).Scan(&b.ID, &b.Version, &b.BlobURI, &b.BlobSHA256, &b.SizeBytes, &b.IsLatest, &b.Notes, &b.AddedAt, &b.AddedByUserID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &b, nil
+	return b, err
 }
 
 func (p *Plugin) getWGBundleBySHA(sha string) (*WGBundle, error) {
-	var b WGBundle
-	err := p.DB.QueryRow(
-		`SELECT id, version, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id
-		   FROM wg_bundles WHERE blob_sha256 = $1`,
-		sha,
-	).Scan(&b.ID, &b.Version, &b.BlobURI, &b.BlobSHA256, &b.SizeBytes, &b.IsLatest, &b.Notes, &b.AddedAt, &b.AddedByUserID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
+	b, err := scanWGBundle(p.DB.QueryRow(`SELECT `+wgBundleCols+` FROM wg_bundles WHERE blob_sha256 = $1`, sha))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	return &b, nil
+	return b, err
 }
 
-func (p *Plugin) getLatestWGBundle() (*WGBundle, error) {
-	var b WGBundle
-	err := p.DB.QueryRow(
-		`SELECT id, version, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id
-		   FROM wg_bundles WHERE is_latest = TRUE LIMIT 1`,
-	).Scan(&b.ID, &b.Version, &b.BlobURI, &b.BlobSHA256, &b.SizeBytes, &b.IsLatest, &b.Notes, &b.AddedAt, &b.AddedByUserID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
+// getWGBundleForVersion resolves a specific version scoped to a platform.
+// Arch fallback: an exact (os,arch) match wins, else a universal (os,arch="")
+// bundle for the same OS. os defaults to "darwin" when empty (back-compat with
+// the original macOS-only bundles).
+func (p *Plugin) getWGBundleForVersion(version, os, arch string) (*WGBundle, error) {
+	if strings.TrimSpace(os) == "" {
+		os = "darwin"
 	}
-	return &b, nil
+	b, err := scanWGBundle(p.DB.QueryRow(
+		`SELECT `+wgBundleCols+` FROM wg_bundles
+		  WHERE version = $1 AND os = $2 AND (arch = $3 OR arch = '')
+		  ORDER BY (arch = $3) DESC LIMIT 1`,
+		version, os, arch))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return b, err
+}
+
+// getLatestWGBundleFor returns the latest bundle for a platform (same arch
+// fallback as getWGBundleForVersion).
+func (p *Plugin) getLatestWGBundleFor(os, arch string) (*WGBundle, error) {
+	if strings.TrimSpace(os) == "" {
+		os = "darwin"
+	}
+	b, err := scanWGBundle(p.DB.QueryRow(
+		`SELECT `+wgBundleCols+` FROM wg_bundles
+		  WHERE is_latest = TRUE AND os = $1 AND (arch = $2 OR arch = '')
+		  ORDER BY (arch = $2) DESC LIMIT 1`,
+		os, arch))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return b, err
+}
+
+// getLatestWGBundle (legacy, no platform) → latest darwin bundle. Kept so
+// existing callers compile; new code uses getLatestWGBundleFor.
+func (p *Plugin) getLatestWGBundle() (*WGBundle, error) {
+	return p.getLatestWGBundleFor("darwin", "")
 }
 
 func (p *Plugin) insertWGBundle(b *WGBundle) (*WGBundle, error) {
@@ -976,11 +982,14 @@ func (p *Plugin) insertWGBundle(b *WGBundle) (*WGBundle, error) {
 	if strings.TrimSpace(b.Version) == "" || strings.TrimSpace(b.BlobSHA256) == "" {
 		return nil, errors.New("version and blob_sha256 required")
 	}
+	if strings.TrimSpace(b.OS) == "" {
+		b.OS = "darwin"
+	}
 	err := p.DB.QueryRow(
-		`INSERT INTO wg_bundles (version, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO wg_bundles (version, os, arch, blob_uri, blob_sha256, size_bytes, is_latest, notes, added_at, added_by_user_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING id, added_at`,
-		b.Version, b.BlobURI, b.BlobSHA256, b.SizeBytes, b.IsLatest, b.Notes, time.Now().UTC(), b.AddedByUserID,
+		b.Version, b.OS, b.Arch, b.BlobURI, b.BlobSHA256, b.SizeBytes, b.IsLatest, b.Notes, time.Now().UTC(), b.AddedByUserID,
 	).Scan(&b.ID, &b.AddedAt)
 	if err != nil {
 		return nil, err
@@ -988,13 +997,20 @@ func (p *Plugin) insertWGBundle(b *WGBundle) (*WGBundle, error) {
 	return b, nil
 }
 
+// setWGBundleLatest marks a bundle latest for ITS platform only — the previous
+// latest for the same (os, arch) is cleared, leaving other platforms' latest
+// untouched.
 func (p *Plugin) setWGBundleLatest(id int64) error {
 	tx, err := p.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`UPDATE wg_bundles SET is_latest = FALSE WHERE is_latest = TRUE`); err != nil {
+	var os, arch string
+	if err := tx.QueryRow(`SELECT os, arch FROM wg_bundles WHERE id = $1`, id).Scan(&os, &arch); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE wg_bundles SET is_latest = FALSE WHERE is_latest = TRUE AND os = $1 AND arch = $2`, os, arch); err != nil {
 		return err
 	}
 	res, err := tx.Exec(`UPDATE wg_bundles SET is_latest = TRUE WHERE id = $1`, id)

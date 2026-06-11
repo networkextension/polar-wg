@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	sdk "github.com/networkextension/polar-sdk"
@@ -71,6 +72,52 @@ func randHex(n int) string {
 func (p *Plugin) ensureBundleAssetColumn() error {
 	_, err := p.DB.Exec(`ALTER TABLE wg_bundles ADD COLUMN IF NOT EXISTS asset_id BIGINT`)
 	return err
+}
+
+// ensureBundleOSArchColumns adds the os/arch dimension to wg_bundles so
+// per-platform bundles can coexist. Idempotent. Existing (macOS-only) rows
+// default to os='darwin', arch='' (universal). "latest" + version-uniqueness
+// move from global to per-(os,arch).
+func (p *Plugin) ensureBundleOSArchColumns() error {
+	stmts := []string{
+		`ALTER TABLE wg_bundles ADD COLUMN IF NOT EXISTS os TEXT NOT NULL DEFAULT 'darwin'`,
+		`ALTER TABLE wg_bundles ADD COLUMN IF NOT EXISTS arch TEXT NOT NULL DEFAULT ''`,
+		`DROP INDEX IF EXISTS ux_wg_bundles_latest`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_wg_bundles_latest_platform ON wg_bundles(os, arch) WHERE is_latest = TRUE`,
+		`ALTER TABLE wg_bundles DROP CONSTRAINT IF EXISTS wg_bundles_version_key`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_wg_bundles_version_platform ON wg_bundles(version, os, arch)`,
+	}
+	for _, s := range stmts {
+		if _, err := p.DB.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// normWGOS canonicalizes an OS string. "" stays "" (caller defaults to darwin).
+func normWGOS(s string) string {
+	t := strings.ToLower(strings.TrimSpace(s))
+	switch t {
+	case "darwin", "macos", "mac", "osx":
+		return "darwin"
+	case "windows", "win":
+		return "windows"
+	default:
+		return t
+	}
+}
+
+// normWGArch canonicalizes an arch string. "" = universal/any.
+func normWGArch(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "x86_64", "amd64", "x64":
+		return "amd64"
+	case "arm64", "aarch64":
+		return "arm64"
+	default:
+		return strings.ToLower(strings.TrimSpace(s))
+	}
 }
 
 func (p *Plugin) setWGBundleAssetID(id, assetID int64) error {

@@ -22,6 +22,8 @@ type wgInstallScriptInput struct {
 	Server        string
 	BundleVersion string
 	MeshCIDR      string
+	OS            string // pinned target os (empty = script auto-detects via uname)
+	Arch          string // pinned target arch (empty = auto-detect)
 }
 
 const wgInstallScriptTemplate = `#!/bin/bash
@@ -34,6 +36,9 @@ set -euo pipefail
 SERVER='{{.Server}}'
 BUNDLE_VERSION='{{.BundleVersion}}'
 MESH_CIDR='{{.MeshCIDR}}'
+# Pinned target platform (baked by /v1/install?os=&arch=); empty = auto-detect.
+TARGET_OS='{{.OS}}'
+TARGET_ARCH='{{.Arch}}'
 
 TOKEN=""
 HOSTNAME_OVERRIDE=""
@@ -49,13 +54,23 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$TOKEN" ]] || { echo "--token=<TOKEN> required"; exit 1; }
 
-# --- 1. fetch + extract bundle ---
+# --- 0. resolve target os/arch (baked target wins, else detect locally) ---
+OS="${TARGET_OS:-$(uname -s | tr 'A-Z' 'a-z')}"
+ARCH_RAW="${TARGET_ARCH:-$(uname -m)}"
+case "$ARCH_RAW" in
+  x86_64|amd64) ARCH=amd64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) ARCH="$ARCH_RAW" ;;
+esac
+
+# --- 1. fetch + extract bundle (server serves the os/arch-specific bundle) ---
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
-echo "==> downloading wg-mac bundle ($BUNDLE_VERSION)"
-BUNDLE_URL="$SERVER/v1/bundle/$BUNDLE_VERSION"
+echo "==> downloading wg bundle ($OS/$ARCH $BUNDLE_VERSION)"
+PLATQ="os=$OS&arch=$ARCH"
+BUNDLE_URL="$SERVER/v1/bundle/$BUNDLE_VERSION?$PLATQ"
 if [[ "$BUNDLE_VERSION" == "" || "$BUNDLE_VERSION" == "latest" ]]; then
-  BUNDLE_URL="$SERVER/v1/bundle"
+  BUNDLE_URL="$SERVER/v1/bundle?$PLATQ"
 fi
 curl -fsSL "$BUNDLE_URL" -o "$TMP/bundle.tar.gz"
 mkdir -p "$TMP/wg-mac"
@@ -74,13 +89,7 @@ PUB=$(echo "$PRIV" | /usr/local/bin/wgctl pubkey)
 
 # --- 4. collect facts ---
 HOSTNAME_REPORT="${HOSTNAME_OVERRIDE:-$(scutil --get LocalHostName 2>/dev/null || hostname)}"
-OS_RAW=$(uname -s | tr 'A-Z' 'a-z')
-ARCH_RAW=$(uname -m)
-case "$ARCH_RAW" in
-  x86_64|amd64) ARCH=amd64 ;;
-  arm64|aarch64) ARCH=arm64 ;;
-  *) ARCH="$ARCH_RAW" ;;
-esac
+OS_RAW="$OS"   # resolved in step 0 (baked target or uname); ARCH set there too
 AGENT_VER=$(cat "$TMP/wg-mac/VERSION" 2>/dev/null || echo "unknown")
 WG_LISTEN=51820
 
