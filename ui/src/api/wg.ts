@@ -81,8 +81,8 @@ export async function createWGTokenForHub(
 }
 
 export async function revokeWGToken(id: number) {
-  return requestJson<{ ok: boolean; error?: string }>(`/api/admin/wg-tokens/${id}`, {
-    method: "DELETE",
+  return requestJson<{ ok: boolean; error?: string }>(`/api/admin/wg-tokens/${id}/revoke`, {
+    method: "POST",
   });
 }
 
