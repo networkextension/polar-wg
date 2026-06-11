@@ -127,7 +127,9 @@ CREATE INDEX IF NOT EXISTS ix_wg_devices_host_id ON wg_devices(host_id) WHERE ho
 
 CREATE TABLE IF NOT EXISTS wg_bundles (
     id BIGSERIAL PRIMARY KEY,
-    version TEXT UNIQUE NOT NULL,
+    version TEXT NOT NULL,
+    os TEXT NOT NULL DEFAULT 'darwin',   -- darwin|linux|windows (packaging = polar-wg-app)
+    arch TEXT NOT NULL DEFAULT '',        -- amd64|arm64, or '' = universal/any
     blob_uri TEXT NOT NULL,
     blob_sha256 TEXT UNIQUE NOT NULL,
     size_bytes BIGINT NOT NULL,
@@ -136,7 +138,9 @@ CREATE TABLE IF NOT EXISTS wg_bundles (
     added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     added_by_user_id TEXT NOT NULL DEFAULT ''
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_wg_bundles_latest ON wg_bundles(is_latest) WHERE is_latest = TRUE;
+-- version is unique per platform; "latest" is per platform.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wg_bundles_version_platform ON wg_bundles(version, os, arch);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wg_bundles_latest_platform ON wg_bundles(os, arch) WHERE is_latest = TRUE;
 
 CREATE TABLE IF NOT EXISTS wg_heartbeats (
     id BIGSERIAL PRIMARY KEY,

@@ -438,9 +438,13 @@ func (p *Plugin) handleWGTokenRefresh(c *gin.Context) {
 // ---- /v1/install (+ /:version) ----
 
 func (p *Plugin) handleWGInstallScript(c *gin.Context) {
+	// Target platform: ?os=&arch= pre-targets a specific bundle (e.g. for
+	// cross-platform packaging). When omitted the script auto-detects via uname
+	// at run time. OS defaults to darwin for back-compat.
+	osTarget, archTarget := reqOSArch(c)
 	version := strings.TrimSpace(c.Param("version"))
 	if version == "" {
-		latest, err := p.getLatestWGBundle()
+		latest, err := p.getLatestWGBundleFor(osTarget, archTarget)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup latest: " + err.Error()})
 			return
@@ -459,10 +463,18 @@ func (p *Plugin) handleWGInstallScript(c *gin.Context) {
 	if hubs, err := p.listWGHubs(); err == nil && len(hubs) > 0 {
 		meshCIDR = hubs[0].MeshCIDR
 	}
+	// When the request pinned os/arch, bake them so the script fetches that
+	// exact bundle; otherwise leave blank so the script uses its uname result.
+	bakeOS, bakeArch := "", archTarget
+	if c.Query("os") != "" {
+		bakeOS = osTarget
+	}
 	script, err := renderWGInstallScript(wgInstallScriptInput{
 		Server:        wgServerBaseURL(c),
 		BundleVersion: version,
 		MeshCIDR:      meshCIDR,
+		OS:            bakeOS,
+		Arch:          bakeArch,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "render: " + err.Error()})
