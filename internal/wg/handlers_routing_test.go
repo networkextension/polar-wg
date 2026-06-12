@@ -120,3 +120,120 @@ func TestOtherConfiguredHubPeers(t *testing.T) {
 		t.Fatalf("hub colliding with own /24 should be skipped, got %+v", peers)
 	}
 }
+
+// ---- P2 egress ----
+
+func hubWithRoutes(id int64, slug, cidr, endpoint, pubkey, wgip string, routes ...string) WGHub {
+	h := hub(id, slug, cidr, endpoint, pubkey, wgip)
+	h.AdvertisedRoutes = routes
+	return h
+}
+
+func i64(v int64) *int64 { return &v }
+
+func TestEgressAllowedExtra(t *testing.T) {
+	own := hubWithRoutes(1, "west", "100.64.0.0/24", "west.example.com:51820", "PKa", "100.64.0.1",
+		"192.168.10.0/24", "0.0.0.0/0")
+	other := hubWithRoutes(2, "east", "100.64.1.0/24", "east.example.com:51820", "PKb", "100.64.1.1",
+		"172.16.5.0/24", "0.0.0.0/0")
+	otherUnbound := hubWithRoutes(3, "pending", "100.64.2.0/24", "p.example.com:51820", "", "100.64.2.1",
+		"10.9.0.0/24")
+	all := []WGHub{own, other, otherUnbound}
+
+	tests := []struct {
+		name   string
+		egress *int64
+		want   []string
+	}{
+		{"nil egress → nothing", nil, nil},
+		{"own hub → all routes incl. full tunnel", i64(1), []string{"192.168.10.0/24", "0.0.0.0/0"}},
+		{"cross-hub → subnets only, full tunnel stripped", i64(2), []string{"172.16.5.0/24"}},
+		{"cross-hub unbound egress hub → nothing (no blackhole)", i64(3), nil},
+		{"unknown hub id → nothing", i64(99), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := egressAllowedExtra(tt.egress, &own, all)
+			if len(got) == 0 && len(tt.want) == 0 {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("egressAllowedExtra = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFabricPeersCarryAdvertisedSubnetsNotDefault(t *testing.T) {
+	hubA := hub(1, "west", "100.64.0.0/24", "west.example.com:51820", "PKa", "100.64.0.1")
+	hubB := hubWithRoutes(2, "east", "100.64.1.0/24", "east.example.com:51820", "PKb", "100.64.1.1",
+		"172.16.5.0/24", "0.0.0.0/0")
+	peers := otherConfiguredHubPeers([]WGHub{hubA, hubB}, 1, "100.64.0.0/24")
+	if len(peers) != 1 {
+		t.Fatalf("want 1 fabric peer, got %d", len(peers))
+	}
+	want := []string{"100.64.1.0/24", "172.16.5.0/24"}
+	if !reflect.DeepEqual(peers[0].AllowedExtra, want) {
+		t.Fatalf("fabric AllowedExtra = %v, want %v (subnets yes, 0.0.0.0/0 never)", peers[0].AllowedExtra, want)
+	}
+}
+
+func TestValidateAdvertisedRoutes(t *testing.T) {
+	hubs := []WGHub{
+		hub(1, "west", "100.64.0.0/24", "w:51820", "PKa", "100.64.0.1"),
+		hub(2, "east", "100.64.1.0/24", "e:51820", "PKb", "100.64.1.1"),
+	}
+	tests := []struct {
+		name   string
+		routes []string
+		wantOK bool
+	}{
+		{"valid subnets", []string{"192.168.10.0/24", "10.9.0.0/16"}, true},
+		{"full tunnel marker", []string{"0.0.0.0/0"}, true},
+		{"mixed", []string{"192.168.10.0/24", "0.0.0.0/0"}, true},
+		{"empty entry", []string{""}, false},
+		{"garbage", []string{"not-a-cidr"}, false},
+		{"ipv6 rejected", []string{"fd00::/64"}, false},
+		{"overlaps a hub mesh /24", []string{"100.64.1.0/25"}, false},
+		{"contains a hub mesh /24", []string{"100.64.0.0/16"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAdvertisedRoutes(tt.routes, hubs)
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("validateAdvertisedRoutes(%v) err=%v, wantOK=%v", tt.routes, err, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestValidateMeshCIDRDisjoint(t *testing.T) {
+	hubs := []WGHub{
+		hub(1, "west", "100.64.0.0/24", "w:51820", "PKa", "100.64.0.1"),
+		hub(2, "east", "100.64.1.0/24", "e:51820", "PKb", "100.64.1.1"),
+	}
+	if err := validateMeshCIDRDisjoint("100.64.2.0/24", hubs, 0); err != nil {
+		t.Fatalf("disjoint /24 rejected: %v", err)
+	}
+	// Updating hub 1 keeping its own CIDR must pass (self excluded).
+	if err := validateMeshCIDRDisjoint("100.64.0.0/24", hubs, 1); err != nil {
+		t.Fatalf("self-overlap on update rejected: %v", err)
+	}
+	if err := validateMeshCIDRDisjoint("100.64.1.0/24", hubs, 0); err == nil {
+		t.Fatalf("exact collision accepted")
+	}
+	if err := validateMeshCIDRDisjoint("100.64.0.0/16", hubs, 0); err == nil {
+		t.Fatalf("supernet containing existing hubs accepted")
+	}
+	if err := validateMeshCIDRDisjoint("100.64.1.128/25", hubs, 0); err == nil {
+		t.Fatalf("subnet inside existing hub accepted")
+	}
+}
+
+func TestSubnetRoutes(t *testing.T) {
+	got := subnetRoutes([]string{"192.168.10.0/24", "0.0.0.0/0", " 0.0.0.0/0", "10.0.0.0/8"})
+	want := []string{"192.168.10.0/24", "10.0.0.0/8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("subnetRoutes = %v, want %v", got, want)
+	}
+}

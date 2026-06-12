@@ -76,34 +76,44 @@ func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64) []wgHubPeerEntry
 **无需新 store 方法** —— 直接复用 `listWGHubs()`。`hub_owned_cidrs` 退化成读
 `hub.mesh_cidr` 一个字段。
 
-## 出口 / 外部子网路由(advertised routes)
+## 出口 / 外部子网路由(advertised routes)— P2,已实现
 
 "涉及到出口" —— 某些 hub 不止转发 mesh 内流量,还是通往**物理子网或公网的网关**:
 - 机房内网 `192.168.10.0/24`(hub 同时在 mesh 和机房 LAN 上)
 - 全隧道出口 `0.0.0.0/0`(让某些 spoke 的全部上网流量从这个 hub 出去)
 
-做法:给 hub 加一个运营商配置的 **advertised_routes** 字段,合并进 `hub_owned_cidrs`。
-spoke 要用某个出口,就把对应 hub 的这些 CIDR 放进它 hub-peer 的 AllowedIPs。
-**默认不全给** —— 全隧道 `0.0.0.0/0` 必须 spoke 显式选择(否则会劫持所有流量)。
+**实现语义(已拍板 + 落地):**
+
+1. **全部 opt-in,零自动分发**:hub 在 `advertised_routes_json` 声明出口 CIDR;设备
+   通过 `wg_devices.egress_hub_id`(每设备一个,NULL=关)显式选用。没选的设备一条
+   advertised route 都看不到 —— 与 mesh /24(自动分发)刻意不同。
+2. **全隧道仅限本 hub**:`0.0.0.0/0` 只在 `egress_hub_id == 本 hub` 时下发。跨 hub
+   选用时服务端剥掉默认路由只给子网(跨 hub 默认路由会劫持中转 hub 自己的流量)。
+   admin 设置时若跨 hub 且对方只声明了 `0.0.0.0/0`,直接 400 拒绝(避免静默 no-op)。
+3. **fabric 无条件携带子网**:hub 互联 peer 的 AllowedIPs = 对方 /24 + 对方 advertised
+   **子网**(永不含 `0.0.0.0/0`)—— 这是跨 hub 出口流量的中转路径,与设备 opt-in 无关。
+4. **校验**:advertised route 必须是合法 IPv4 CIDR,且不得与任何 hub 的 mesh_cidr
+   重叠(防 mesh 路由被遮蔽);顺带补了 mint/update 时 hub mesh_cidr 互不重叠校验
+   (P1 的 follow-up)。
 
 ```sql
-ALTER TABLE wg_hubs ADD COLUMN IF NOT EXISTS advertised_routes_json TEXT NOT NULL DEFAULT '[]';
--- 例: ["192.168.10.0/24", "0.0.0.0/0"]
+-- 实际 schema(ensureEgressColumns 启动幂等 + wg-schema.sql)
+ALTER TABLE wg_hubs    ADD COLUMN IF NOT EXISTS advertised_routes_json JSONB;
+ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS egress_hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE SET NULL;
 ```
 
-是否把某 hub 的 `0.0.0.0/0` 出口暴露给某 spoke,是一个**显式开关**(per-device 或
-per-site 的策略),不是自动 —— 避免误把所有人流量导到一个机房。
+Admin 面:`PUT /api/admin/wg-hubs/:id` 收 `advertised_routes`(nil=不动,[]=清空);
+新增 `PUT /api/admin/wg-devices/:id` 收 `{egress_hub_id}`。UI:Hubs 标签「出口」按钮
+编辑 CIDR 列表;Devices 标签每行出口下拉(标注 本hub/跨hub仅子网)。
+
+**运维注意(NAT)**:出口 hub 把 mesh 流量转出物理网卡时需要 masquerade,wg 层不管。
+macOS pf 示例:`nat on en0 from 100.64.0.0/10 to any -> (en0)`;Linux:
+`iptables -t nat -A POSTROUTING -s 100.64.0.0/10 -o eth0 -j MASQUERADE`。
 
 ## Schema 改动汇总(全部 additive)
 
-```sql
--- hub 的对外/出口路由声明(出口网关、全隧道)
-ALTER TABLE wg_hubs ADD COLUMN IF NOT EXISTS advertised_routes_json TEXT NOT NULL DEFAULT '[]';
-```
-
-就这一列(P2 才加)。`wg_hubs` 多行、`hub_id` 外键、site→hub 归属全都已存在。P1
-cross-hub 路由**零 schema 改动** —— 路由单位就是 `hub.mesh_cidr`,出口从
-`advertised_routes_json` 读(P2)。
+见上节 SQL —— P2 共两列。`wg_hubs` 多行、`hub_id` 外键、site→hub 归属全都已存在。
+P1 cross-hub 路由零 schema 改动。
 
 ## 客户端(wgctl)影响
 
@@ -140,7 +150,8 @@ cross-hub 路由**零 schema 改动** —— 路由单位就是 `hub.mesh_cidr`,
   改动。spoke 侧 + hub 初始 conf 即时生效;hub 刷新合约就绪,等客户端跟进。
 - **P1-client(跟进)** wgctl-agent 渲染 `/v1/hub/peers` 新增的 hub-peer 条目
   (`endpoint` + `allowed_extra`),使 hub roster 变化无需重装即可跟进。
-- **P2** `advertised_routes_json` 出口路由 + per-spoke 出口选择策略。
+- **P2(已实现)** `advertised_routes_json` 出口路由 + per-device `egress_hub_id`
+  选择 + mesh_cidr 重叠校验 + admin API/UI。见上文「出口」节。
 - **P3** 管理 UI:hub 拓扑图标注每个 hub 的 owned-CIDRs 和出口(复用
   `feat/wg-hub-topology-ui` PR#16 的星形图,升级成多 hub 互联图)。
 

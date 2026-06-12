@@ -95,6 +95,22 @@ func (p *Plugin) ensureBundleOSArchColumns() error {
 	return nil
 }
 
+// ensureEgressColumns adds the P2 egress columns: wg_hubs.advertised_routes_json
+// (operator-declared egress CIDRs) + wg_devices.egress_hub_id (per-device
+// opt-in). Idempotent. See doc/wg-multi-hub-routing.md 出口 section.
+func (p *Plugin) ensureEgressColumns() error {
+	stmts := []string{
+		`ALTER TABLE wg_hubs ADD COLUMN IF NOT EXISTS advertised_routes_json JSONB`,
+		`ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS egress_hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE SET NULL`,
+	}
+	for _, s := range stmts {
+		if _, err := p.DB.Exec(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // normWGOS canonicalizes an OS string. "" stays "" (caller defaults to darwin).
 func normWGOS(s string) string {
 	t := strings.ToLower(strings.TrimSpace(s))

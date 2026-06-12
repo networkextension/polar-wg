@@ -125,6 +125,12 @@ CREATE INDEX IF NOT EXISTS ix_wg_devices_hub ON wg_devices(hub_id) WHERE removed
 ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS host_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS ix_wg_devices_host_id ON wg_devices(host_id) WHERE host_id <> '';
 
+-- P2 egress (added 2026-06-12): hub-declared egress CIDRs + per-device opt-in.
+-- See doc/wg-multi-hub-routing.md 出口 section. 0.0.0.0/0 only effective when
+-- egress_hub_id equals the device's own hub (enforced server-side).
+ALTER TABLE wg_hubs    ADD COLUMN IF NOT EXISTS advertised_routes_json JSONB;
+ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS egress_hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE SET NULL;
+
 CREATE TABLE IF NOT EXISTS wg_bundles (
     id BIGSERIAL PRIMARY KEY,
     version TEXT NOT NULL,

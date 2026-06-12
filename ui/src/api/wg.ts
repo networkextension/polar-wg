@@ -4,6 +4,7 @@ import { requestJson } from "@networkextension/polar-ui-common/api/http";
 import type {
   WGBundleListResponse,
   WGBundleResponse,
+  WGDevice,
   WGDeviceListResponse,
   WGHub,
   WGHubListResponse,
@@ -96,6 +97,14 @@ export async function listWGDevices(includeRemoved = false) {
 export async function removeWGDevice(id: number) {
   return requestJson<{ ok: boolean; error?: string }>(`/api/admin/wg-devices/${id}`, {
     method: "DELETE",
+  });
+}
+
+// P2 egress: set (number) or clear (null) a device's egress hub opt-in.
+export async function updateWGDeviceEgress(id: number, egressHubID: number | null) {
+  return requestJson<{ device?: WGDevice; error?: string }>(`/api/admin/wg-devices/${id}`, {
+    method: "PUT",
+    body: { egress_hub_id: egressHubID },
   });
 }
 

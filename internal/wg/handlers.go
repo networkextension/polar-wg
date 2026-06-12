@@ -251,6 +251,9 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 			allowedExtra = append(allowedExtra, mesh.ipnet.String())
 		}
 		allowedExtra = append(allowedExtra, crossHubAllowedExtra(allHubs, hub.ID, hub.MeshCIDR)...)
+		// P2 egress opt-in: the egress hub's advertised routes ride the
+		// own-hub peer too (cross-hub traffic transits the fabric).
+		allowedExtra = append(allowedExtra, egressAllowedExtra(dev.EgressHubID, hub, allHubs)...)
 		peerOut = append(peerOut, wgPeerResponse{
 			Pubkey:       hub.Pubkey,
 			WGIP:         hub.WGIP,
@@ -362,15 +365,125 @@ func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64, ownCIDR string) []
 		if wgip != "" && !strings.Contains(wgip, "/") {
 			wgip += "/32"
 		}
+		// Fabric peers carry the other hub's /24 PLUS its advertised
+		// SUBNETS (never 0.0.0.0/0) — unconditional: this is the transit
+		// path for spokes that opted into a cross-hub egress.
+		allowed := append([]string{hubMeshNetwork(h.MeshCIDR)}, subnetRoutes(h.AdvertisedRoutes)...)
 		out = append(out, wgHubPeerEntry{
 			Pubkey:       h.Pubkey,
 			WGIP:         wgip,
 			Hostname:     "hub:" + h.Slug,
 			Endpoint:     h.Endpoint,
-			AllowedExtra: []string{hubMeshNetwork(h.MeshCIDR)},
+			AllowedExtra: allowed,
 		})
 	}
 	return out
+}
+
+// ---- egress / advertised routes (P2 出口) ----
+//
+// A hub may declare egress CIDRs it gateways to (advertised_routes):
+// datacenter subnets, or "0.0.0.0/0" full tunnel. Distribution is strictly
+// per-device opt-in (wg_devices.egress_hub_id) — nothing auto-spreads.
+// Full tunnel is only honored when the egress hub IS the device's own hub:
+// a cross-hub default route would hijack the transit hub's own traffic.
+
+const defaultRouteCIDR = "0.0.0.0/0"
+
+// subnetRoutes filters advertised routes down to the non-default ones.
+func subnetRoutes(routes []string) []string {
+	out := make([]string, 0, len(routes))
+	for _, r := range routes {
+		if strings.TrimSpace(r) != defaultRouteCIDR {
+			out = append(out, strings.TrimSpace(r))
+		}
+	}
+	return out
+}
+
+// egressAllowedExtra computes the extra AllowedIPs a spoke gets from its
+// egress opt-in. Pure. Cross-hub egress requires the egress hub to be
+// configured (it must be reachable through the fabric to forward).
+func egressAllowedExtra(egressHubID *int64, ownHub *WGHub, allHubs []WGHub) []string {
+	if egressHubID == nil || ownHub == nil {
+		return nil
+	}
+	if *egressHubID == ownHub.ID {
+		// Own hub: everything it advertises, incl. 0.0.0.0/0.
+		out := make([]string, 0, len(ownHub.AdvertisedRoutes))
+		for _, r := range ownHub.AdvertisedRoutes {
+			out = append(out, strings.TrimSpace(r))
+		}
+		return out
+	}
+	for _, h := range allHubs {
+		if h.ID != *egressHubID {
+			continue
+		}
+		if !h.Configured() || strings.TrimSpace(h.Endpoint) == "" {
+			return nil // unreachable egress hub — emit nothing rather than blackhole
+		}
+		return subnetRoutes(h.AdvertisedRoutes)
+	}
+	return nil
+}
+
+// cidrOverlaps reports whether two parsed IPv4 networks overlap.
+func cidrOverlaps(a, b *meshNet) bool {
+	return a.ipnet.Contains(b.ipnet.IP) || b.ipnet.Contains(a.ipnet.IP)
+}
+
+// validateAdvertisedRoutes checks operator input for a hub's egress list:
+// each entry must be a valid IPv4 CIDR ("0.0.0.0/0" allowed as the full-
+// tunnel marker); subnets must not overlap ANY hub's mesh_cidr (that would
+// shadow mesh routing).
+func validateAdvertisedRoutes(routes []string, allHubs []WGHub) error {
+	for _, r := range routes {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			return fmt.Errorf("empty route entry")
+		}
+		if r == defaultRouteCIDR {
+			continue
+		}
+		n, err := parseMeshCIDR(r)
+		if err != nil {
+			return fmt.Errorf("invalid route %q: %v", r, err)
+		}
+		for _, h := range allHubs {
+			m, merr := parseMeshCIDR(h.MeshCIDR)
+			if merr != nil {
+				continue
+			}
+			if cidrOverlaps(n, m) {
+				return fmt.Errorf("route %q overlaps hub %q mesh_cidr %s", r, h.Slug, h.MeshCIDR)
+			}
+		}
+	}
+	return nil
+}
+
+// validateMeshCIDRDisjoint rejects a mesh_cidr that overlaps any OTHER
+// hub's (mint-time guard; suggestFreeMeshCIDR picks disjoint /24s but
+// operator-supplied mesh_cidr_pref / update values are free-form).
+func validateMeshCIDRDisjoint(meshCIDR string, allHubs []WGHub, selfHubID int64) error {
+	n, err := parseMeshCIDR(meshCIDR)
+	if err != nil {
+		return err
+	}
+	for _, h := range allHubs {
+		if h.ID == selfHubID {
+			continue
+		}
+		m, merr := parseMeshCIDR(h.MeshCIDR)
+		if merr != nil {
+			continue
+		}
+		if cidrOverlaps(n, m) {
+			return fmt.Errorf("mesh_cidr %s overlaps hub %q (%s)", meshCIDR, h.Slug, h.MeshCIDR)
+		}
+	}
+	return nil
 }
 
 // ---- /v1/hub/peers ----
@@ -627,9 +740,16 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 		MeshCIDR     string `json:"mesh_cidr"`
 		KeepaliveSec int    `json:"keepalive_sec"`
 		RefreshSec   int    `json:"refresh_sec"`
+		// P2 egress: nil = leave unchanged; [] = clear; non-empty = replace.
+		AdvertisedRoutes *[]string `json:"advertised_routes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_input"})
+		return
+	}
+	allHubs, err := p.listWGHubs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
 	existing.Label = req.Label
@@ -638,6 +758,12 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 		existing.WGIP = req.WGIP
 	}
 	if req.MeshCIDR != "" {
+		// Mint-time disjointness guard: a hand-edited mesh_cidr must not
+		// overlap any other hub's (cross-hub routing depends on it).
+		if err := validateMeshCIDRDisjoint(req.MeshCIDR, allHubs, existing.ID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		existing.MeshCIDR = req.MeshCIDR
 	}
 	if req.KeepaliveSec > 0 {
@@ -645,6 +771,13 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 	}
 	if req.RefreshSec > 0 {
 		existing.RefreshSec = req.RefreshSec
+	}
+	if req.AdvertisedRoutes != nil {
+		if err := validateAdvertisedRoutes(*req.AdvertisedRoutes, allHubs); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		existing.AdvertisedRoutes = *req.AdvertisedRoutes
 	}
 	out, err := p.updateWGHub(existing, time.Now().UTC())
 	if err != nil {
@@ -788,6 +921,61 @@ func (p *Plugin) handleAdminWGDeviceList(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"devices": devs})
+}
+
+// handleAdminWGDeviceUpdate — P2 egress: set/clear a device's egress
+// opt-in. Body: {"egress_hub_id": <id>} or {"egress_hub_id": null}.
+// Cross-hub egress is allowed only when the egress hub advertises at
+// least one subnet (0.0.0.0/0 never crosses hubs, so opting into a hub
+// that only declares the default route would be a silent no-op — reject
+// with a clear message instead).
+func (p *Plugin) handleAdminWGDeviceUpdate(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
+		return
+	}
+	dev, err := p.getWGDeviceByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		return
+	}
+	if dev == nil || dev.RemovedAt != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var req struct {
+		EgressHubID *int64 `json:"egress_hub_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_input"})
+		return
+	}
+	if req.EgressHubID != nil {
+		eh, err := p.getWGHubByID(*req.EgressHubID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+			return
+		}
+		if eh == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "egress hub not found"})
+			return
+		}
+		if len(eh.AdvertisedRoutes) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hub has no advertised routes"})
+			return
+		}
+		if eh.ID != dev.HubID && len(subnetRoutes(eh.AdvertisedRoutes)) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cross-hub egress requires subnet routes; 0.0.0.0/0 full tunnel only works via the device's own hub"})
+			return
+		}
+	}
+	if err := p.updateWGDeviceEgressHub(id, req.EgressHubID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		return
+	}
+	dev, _ = p.getWGDeviceByID(id)
+	c.JSON(http.StatusOK, gin.H{"device": dev})
 }
 
 func (p *Plugin) handleAdminWGDeviceRemove(c *gin.Context) {
