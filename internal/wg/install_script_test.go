@@ -23,6 +23,10 @@ func TestRenderWGInstallScript(t *testing.T) {
 		"/v1/bundle/$BUNDLE_VERSION",
 		"/usr/local/bin/wgctl genkey",
 		"launchctl kickstart",
+		// hub role enables forwarding so the box relays spoke-to-spoke
+		// and cross-hub traffic (multi-hub fabric).
+		"net.inet.ip.forwarding=1",
+		"net.ipv4.ip_forward=1",
 	}
 	for _, w := range wants {
 		if !strings.Contains(s, w) {
