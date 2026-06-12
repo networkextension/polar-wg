@@ -29,13 +29,16 @@ type wgHubStatusEntry struct {
 }
 
 type wgHubStatusRow struct {
-	ID       int64             `json:"id"`
-	Slug     string            `json:"slug"`
-	Label    string            `json:"label"`
-	Pubkey   string            `json:"pubkey"`
-	Endpoint string            `json:"endpoint"`
-	WGIP     string            `json:"wg_ip"`
-	Status   *wgHubStatusEntry `json:"status"`
+	ID       int64  `json:"id"`
+	Slug     string `json:"slug"`
+	Label    string `json:"label"`
+	Pubkey   string `json:"pubkey"`
+	Endpoint string `json:"endpoint"`
+	WGIP     string `json:"wg_ip"`
+	// P3 topology annotations: the hub's owned /24 + declared egress.
+	MeshCIDR         string            `json:"mesh_cidr,omitempty"`
+	AdvertisedRoutes []string          `json:"advertised_routes,omitempty"`
+	Status           *wgHubStatusEntry `json:"status"`
 }
 
 type wgHubStatusResponse struct {
@@ -59,12 +62,14 @@ func (p *Plugin) handleAdminWGHubStatus(c *gin.Context) {
 	out := wgHubStatusResponse{Hubs: make([]wgHubStatusRow, 0, len(hubs))}
 	for _, h := range hubs {
 		row := wgHubStatusRow{
-			ID:       h.ID,
-			Slug:     h.Slug,
-			Label:    h.Label,
-			Pubkey:   h.Pubkey,
-			Endpoint: h.Endpoint,
-			WGIP:     h.WGIP,
+			ID:               h.ID,
+			Slug:             h.Slug,
+			Label:            h.Label,
+			Pubkey:           h.Pubkey,
+			Endpoint:         h.Endpoint,
+			WGIP:             h.WGIP,
+			MeshCIDR:         h.MeshCIDR,
+			AdvertisedRoutes: h.AdvertisedRoutes,
 		}
 		if p.hubStatus != nil && h.Pubkey != "" {
 			if sample, ok, stale := p.hubStatus.lookup(h.Pubkey); ok {

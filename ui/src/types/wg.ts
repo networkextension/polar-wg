@@ -138,6 +138,9 @@ export type WGHubStatusRow = {
   pubkey: string;
   endpoint: string;
   wg_ip: string;
+  // P3 topology annotations: the hub's owned /24 + declared egress.
+  mesh_cidr?: string;
+  advertised_routes?: string[];
   status: WGHubStatusEntry | null;
 };
 
