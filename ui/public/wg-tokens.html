@@ -75,6 +75,8 @@
               .topo-hub circle { stroke:#fff; stroke-width:2; cursor:pointer; }
               .topo-hub-count { font-size:13px; font-weight:700; fill:#fff; pointer-events:none; }
               .topo-hub-label { font-size:12px; font-weight:600; fill: var(--text, #222); pointer-events:none; }
+              .topo-hub-cidr { font-size:10px; fill: var(--muted, #888); pointer-events:none; }
+              .topo-egress { font-size:15px; cursor:help; }
               .topo-legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin:4px 0 8px; align-items:center; color: var(--muted,#888); }
               .topo-legend .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
               .topo-legend .ln { display:inline-block; width:18px; border-top:3px dashed currentColor; margin-right:4px; vertical-align:middle; }
@@ -99,6 +101,7 @@
                     <span><span class="dot" style="background:#b58900;"></span>设备(&gt;1min)</span>
                     <span><span class="dot" style="background:#c0392b;"></span>设备(掉线)</span>
                     <span style="color:#3a6df0;"><span class="ln"></span>Hub 互联</span>
+                    <span>🌍 出口 hub（悬停看路由）</span>
                   </div>
                   <div id="hubTopology"></div>
                 </div>

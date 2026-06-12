@@ -405,9 +405,21 @@ function renderTopology(rows: WGHubStatusRow[]): string {
     // hub node on top
     const peerCount = r.status?.peer_count ?? peers.length;
     const fill = !r.status ? "#9aa0a6" : r.status.stale ? "#c0392b" : "#3a6df0";
-    const htip = `${r.label || r.slug}\n${r.endpoint || "no endpoint"}\nwg ${r.wg_ip || "—"}\n${peerCount} peers${r.status?.stale ? " (stale)" : ""}`;
+    const egress = r.advertised_routes ?? [];
+    const egressTip = egress.length
+      ? `\n出口: ${egress.map((rt) => (rt === "0.0.0.0/0" ? "0.0.0.0/0 (全隧道)" : rt)).join(", ")}`
+      : "";
+    const htip = `${r.label || r.slug}\n${r.endpoint || "no endpoint"}\nwg ${r.wg_ip || "—"}\nmesh ${r.mesh_cidr || "—"}\n${peerCount} peers${r.status?.stale ? " (stale)" : ""}${egressTip}`;
+    // P3 annotations: owned /24 under the label; 🌍 badge when the hub
+    // declares egress routes (hover for the route list).
+    const cidrLine = r.mesh_cidr
+      ? `<text x="${hp.x.toFixed(1)}" y="${(hp.y + 54).toFixed(1)}" text-anchor="middle" class="topo-hub-cidr">${esc(r.mesh_cidr)}</text>`
+      : "";
+    const egressBadge = egress.length
+      ? `<text x="${(hp.x + 18).toFixed(1)}" y="${(hp.y - 16).toFixed(1)}" class="topo-egress">🌍<title>${esc("出口路由:\n" + egress.join("\n"))}</title></text>`
+      : "";
     hubNodes.push(
-      `<g class="topo-hub"><circle cx="${hp.x.toFixed(1)}" cy="${hp.y.toFixed(1)}" r="22" fill="${fill}"><title>${esc(htip)}</title></circle><text x="${hp.x.toFixed(1)}" y="${(hp.y + 5).toFixed(1)}" text-anchor="middle" class="topo-hub-count">${peerCount}</text><text x="${hp.x.toFixed(1)}" y="${(hp.y + 40).toFixed(1)}" text-anchor="middle" class="topo-hub-label">${esc(r.label || r.slug)}</text></g>`,
+      `<g class="topo-hub"><circle cx="${hp.x.toFixed(1)}" cy="${hp.y.toFixed(1)}" r="22" fill="${fill}"><title>${esc(htip)}</title></circle><text x="${hp.x.toFixed(1)}" y="${(hp.y + 5).toFixed(1)}" text-anchor="middle" class="topo-hub-count">${peerCount}</text><text x="${hp.x.toFixed(1)}" y="${(hp.y + 40).toFixed(1)}" text-anchor="middle" class="topo-hub-label">${esc(r.label || r.slug)}</text>${cidrLine}${egressBadge}</g>`,
     );
   });
 

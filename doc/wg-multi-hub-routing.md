@@ -152,8 +152,9 @@ P1 cross-hub 路由零 schema 改动。
   (`endpoint` + `allowed_extra`),使 hub roster 变化无需重装即可跟进。
 - **P2(已实现)** `advertised_routes_json` 出口路由 + per-device `egress_hub_id`
   选择 + mesh_cidr 重叠校验 + admin API/UI。见上文「出口」节。
-- **P3** 管理 UI:hub 拓扑图标注每个 hub 的 owned-CIDRs 和出口(复用
-  `feat/wg-hub-topology-ui` PR#16 的星形图,升级成多 hub 互联图)。
+- **P3(已实现)** 拓扑图标注:hub 节点下方显示 owned mesh_cidr;声明了出口路由的
+  hub 带 🌍 角标(悬停列出路由,全隧道特别标注);hub tooltip 含 mesh + 出口。
+  hub↔hub 互联线 PR#16 已有(P1 fabric peer 出现在 wg show 后自动显现)。
 
 ## 不做(out of scope)
 
