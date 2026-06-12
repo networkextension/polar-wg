@@ -87,7 +87,7 @@ func TestOtherConfiguredHubPeers(t *testing.T) {
 	hubUnbound := hub(3, "pending", "100.64.2.0/24", "p.example.com:51820", "", "100.64.2.1")
 	hubNoEndpoint := hub(4, "nat", "100.64.3.0/24", "", "PKd", "100.64.3.1")
 
-	got := otherConfiguredHubPeers([]WGHub{hubA, hubB, hubUnbound, hubNoEndpoint}, 1)
+	got := otherConfiguredHubPeers([]WGHub{hubA, hubB, hubUnbound, hubNoEndpoint}, 1, "100.64.0.0/24")
 	want := []wgHubPeerEntry{
 		{
 			Pubkey:       "PKb",
@@ -102,14 +102,21 @@ func TestOtherConfiguredHubPeers(t *testing.T) {
 	}
 
 	// The hub's own row is excluded; a lone hub yields no fabric peers.
-	if peers := otherConfiguredHubPeers([]WGHub{hubA}, 1); len(peers) != 0 {
+	if peers := otherConfiguredHubPeers([]WGHub{hubA}, 1, "100.64.0.0/24"); len(peers) != 0 {
 		t.Fatalf("single-hub mesh should produce no other-hub peers, got %+v", peers)
 	}
 
 	// wg_ip already carrying /32 is not double-suffixed.
 	hubWithMask := hub(5, "north", "100.64.4.0/24", "north.example.com:51820", "PKn", "100.64.4.1/32")
-	peers := otherConfiguredHubPeers([]WGHub{hubA, hubWithMask}, 1)
+	peers := otherConfiguredHubPeers([]WGHub{hubA, hubWithMask}, 1, "100.64.0.0/24")
 	if len(peers) != 1 || peers[0].WGIP != "100.64.4.1/32" {
 		t.Fatalf("wg_ip /32 handling wrong: %+v", peers)
+	}
+
+	// A hub whose /24 collides with the OWN hub's must be skipped too
+	// (own CIDR seeds the dedup set in the shared filter).
+	hubOwnDup := hub(6, "shadow", "100.64.0.0/24", "shadow.example.com:51820", "PKs", "100.64.0.9")
+	if peers := otherConfiguredHubPeers([]WGHub{hubA, hubOwnDup}, 1, "100.64.0.0/24"); len(peers) != 0 {
+		t.Fatalf("hub colliding with own /24 should be skipped, got %+v", peers)
 	}
 }

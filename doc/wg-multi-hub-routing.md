@@ -110,11 +110,17 @@ cross-hub 路由**零 schema 改动** —— 路由单位就是 `hub.mesh_cidr`,
 - **Spoke 节点(零客户端改动)**:hub-peer 的 `allowed_extra` 多了几条 /24。沿用现有
   `wgPeerResponse.AllowedExtra` 字段,wgctl "用 server 返回覆盖本地 conf" 流程不动 ——
   P1 server 一上线即生效。
-- **Hub 节点(需要客户端跟进)**:`/v1/hub/peers` 现在会多返回其他 hub 的条目,带新增的
-  `endpoint` + `allowed_extra` 字段。消费 `/v1/hub/peers` 的 **wgctl / wg-mac 客户端
-  (独立 C 代码库,不在本 repo)** 需要学会把这些条目渲染成带公网 endpoint + AllowedIPs
-  的 [Peer],并开 `net.inet.ip.forwarding=1`。**在客户端落地前,server 合约已就绪但
-  hub 间不会真正转发** —— spoke 侧已先生效,无回归。
+- **Hub 节点 — 初始 conf(零客户端改动)**:`/v1/register` 对 hub 本机的响应现在直接
+  包含其他 hub 作为 peer(`buildPeerListResponse` 的 hub-self 分支),而 install.sh
+  内嵌的渲染器本来就会写 `endpoint` + `allowed_extra` → **装机即获得 hub fabric**。
+  install.sh 同时在 `role=hub` 时开启 IP 转发(darwin `net.inet.ip.forwarding=1` /
+  linux `net.ipv4.ip_forward=1`,并写入 sysctl.conf 持久化)。
+- **Hub 节点 — 后续刷新(需要客户端跟进)**:wgctl-agent 周期 poll 的 `/v1/hub/peers`
+  现在会多返回其他 hub 的条目(新增 `endpoint` + `allowed_extra` 字段)。消费它的
+  **wgctl / wg-mac 客户端(独立 C 代码库,不在本 repo)** 需要学会渲染这些字段,否则
+  agent 的下一次 conf 重写会把初始 conf 里的 fabric peer 降级(丢 endpoint/AllowedIPs)。
+  在客户端落地前:装机时 fabric 生效,但 hub roster 变化(新增/换 endpoint)要重跑
+  install 或手动改 conf 才能跟上。
 
 ## 一致性 / 防环
 
@@ -127,11 +133,13 @@ cross-hub 路由**零 schema 改动** —— 路由单位就是 `hub.mesh_cidr`,
 
 ## Phasing
 
-- **P1(本 PR,server 侧)** 两个纯函数 `crossHubAllowedExtra` /
-  `otherConfiguredHubPeers` + `buildPeerListResponse`(spoke 侧)+ `handleWGHubPeers`
-  / `wgHubPeerEntry`(hub 侧)。复用 `listWGHubs()`,零 schema 改动。spoke 侧即时生效;
-  hub 侧合约就绪,等客户端跟进。
-- **P1-client(跟进)** wgctl / wg-mac 渲染 `/v1/hub/peers` 新增的 hub-peer 条目。
+- **P1(本 PR,server 侧)** 共享过滤器 `otherConfiguredHubs` + 两个纯函数
+  `crossHubAllowedExtra` / `otherConfiguredHubPeers`;`buildPeerListResponse` 改造
+  (spoke 侧 widening + hub-self fabric 分支);`handleWGHubPeers` / `wgHubPeerEntry`
+  (hub 刷新合约);install.sh hub 角色开 IP 转发。复用 `listWGHubs()`,零 schema
+  改动。spoke 侧 + hub 初始 conf 即时生效;hub 刷新合约就绪,等客户端跟进。
+- **P1-client(跟进)** wgctl-agent 渲染 `/v1/hub/peers` 新增的 hub-peer 条目
+  (`endpoint` + `allowed_extra`),使 hub roster 变化无需重装即可跟进。
 - **P2** `advertised_routes_json` 出口路由 + per-spoke 出口选择策略。
 - **P3** 管理 UI:hub 拓扑图标注每个 hub 的 owned-CIDRs 和出口(复用
   `feat/wg-hub-topology-ui` PR#16 的星形图,升级成多 hub 互联图)。

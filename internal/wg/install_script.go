@@ -180,6 +180,22 @@ open("/etc/wgctl/config.json", "w").write(json.dumps(state, indent=2))
 os.chmod("/etc/wgctl/config.json", 0o600)
 PYRENDER
 
+# --- 6.5 hub role: enable IP forwarding so this box relays ----
+#     spoke-to-spoke and cross-hub traffic (multi-hub fabric).
+ROLE=$(python3 -c 'import json; print(json.load(open("/etc/wgctl/config.json")).get("role", "device"))')
+if [[ "$ROLE" == "hub" ]]; then
+  echo "==> hub role: enabling IP forwarding"
+  if [[ "$OS_RAW" == "darwin" ]]; then
+    sysctl -w net.inet.ip.forwarding=1 >/dev/null || true
+    grep -q '^net.inet.ip.forwarding=1' /etc/sysctl.conf 2>/dev/null \
+      || echo 'net.inet.ip.forwarding=1' >> /etc/sysctl.conf
+  else
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
+    grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
+      || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+  fi
+fi
+
 # --- 7. kickstart wgc0, then bring up wgctl-agent for periodic ----
 #     heartbeat + peer-list refresh. Agent reads /etc/wgctl/config.json
 #     and posts /v1/heartbeat + polls /v1/peers (or /v1/hub/peers) on

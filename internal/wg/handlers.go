@@ -236,19 +236,19 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 			Hostname: p.Hostname,
 		})
 	}
-	// Hub peer (only if hub is bound AND caller isn't the hub itself).
-	if hub.Configured() && (hub.BoundDeviceID == nil || *hub.BoundDeviceID != dev.ID) {
+	isHubSelf := hub.BoundDeviceID != nil && *hub.BoundDeviceID == dev.ID
+	allHubs, err := p.listWGHubs()
+	if err != nil {
+		return nil, fmt.Errorf("list hubs: %w", err)
+	}
+	if hub.Configured() && !isHubSelf {
+		// Spoke: one hub peer. AllowedIPs = own hub's /24 + every OTHER
+		// hub's /24 — cross-hub traffic routes via the own hub, which
+		// forwards into the hub-to-hub fabric. Client-transparent:
+		// allowed_extra is already honored for the own-hub /24.
 		allowedExtra := make([]string, 0, 4)
-		// Hub's own /24 (computed from mesh_cidr's network address).
 		if mesh, err := parseMeshCIDR(hub.MeshCIDR); err == nil {
 			allowedExtra = append(allowedExtra, mesh.ipnet.String())
-		}
-		// Cross-hub: route every OTHER hub's /24 via this spoke's own hub,
-		// which forwards into the hub-to-hub fabric. Client-transparent —
-		// allowed_extra is already honored for the own-hub /24 above.
-		allHubs, err := p.listWGHubs()
-		if err != nil {
-			return nil, fmt.Errorf("list hubs: %w", err)
 		}
 		allowedExtra = append(allowedExtra, crossHubAllowedExtra(allHubs, hub.ID, hub.MeshCIDR)...)
 		peerOut = append(peerOut, wgPeerResponse{
@@ -258,6 +258,20 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 			SiteSlug:     "hub",
 			AllowedExtra: allowedExtra,
 		})
+	} else if isHubSelf {
+		// Hub itself: every OTHER configured hub becomes a direct peer
+		// (full mesh among public-IP hubs). This puts the fabric into the
+		// hub's INITIAL conf at install time — the install script's
+		// renderer already handles endpoint + allowed_extra.
+		for _, e := range otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR) {
+			peerOut = append(peerOut, wgPeerResponse{
+				Pubkey:       e.Pubkey,
+				WGIP:         strings.TrimSuffix(e.WGIP, "/32"),
+				Endpoint:     e.Endpoint,
+				SiteSlug:     e.Hostname, // "hub:<slug>"
+				AllowedExtra: e.AllowedExtra,
+			})
+		}
 	}
 	return &wgRegisterResponse{
 		DeviceID:     dev.DeviceID,
@@ -308,8 +322,11 @@ func hubMeshNetwork(meshCIDR string) string {
 	return ""
 }
 
-func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string) []string {
-	out := make([]string, 0, len(allHubs))
+// otherConfiguredHubs is the shared filter: every OTHER hub usable as a
+// cross-hub peer (bound + public endpoint + /24 not seen yet, seeding
+// the dedup set with the own hub's /24).
+func otherConfiguredHubs(allHubs []WGHub, ownHubID int64, ownCIDR string) []WGHub {
+	out := make([]WGHub, 0, len(allHubs))
 	seen := map[string]bool{}
 	if own := hubMeshNetwork(ownCIDR); own != "" {
 		seen[own] = true
@@ -323,23 +340,24 @@ func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string) []str
 			continue
 		}
 		seen[n] = true
-		out = append(out, n)
+		out = append(out, h)
 	}
 	return out
 }
 
-func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64) []wgHubPeerEntry {
-	out := make([]wgHubPeerEntry, 0, len(allHubs))
-	seen := map[string]bool{}
-	for _, h := range allHubs {
-		if h.ID == ownHubID || !h.Configured() || strings.TrimSpace(h.Endpoint) == "" {
-			continue
-		}
-		n := hubMeshNetwork(h.MeshCIDR)
-		if n == "" || seen[n] {
-			continue
-		}
-		seen[n] = true
+func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string) []string {
+	hubs := otherConfiguredHubs(allHubs, ownHubID, ownCIDR)
+	out := make([]string, 0, len(hubs))
+	for _, h := range hubs {
+		out = append(out, hubMeshNetwork(h.MeshCIDR))
+	}
+	return out
+}
+
+func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64, ownCIDR string) []wgHubPeerEntry {
+	hubs := otherConfiguredHubs(allHubs, ownHubID, ownCIDR)
+	out := make([]wgHubPeerEntry, 0, len(hubs))
+	for _, h := range hubs {
 		wgip := h.WGIP
 		if wgip != "" && !strings.Contains(wgip, "/") {
 			wgip += "/32"
@@ -349,7 +367,7 @@ func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64) []wgHubPeerEntry {
 			WGIP:         wgip,
 			Hostname:     "hub:" + h.Slug,
 			Endpoint:     h.Endpoint,
-			AllowedExtra: []string{n},
+			AllowedExtra: []string{hubMeshNetwork(h.MeshCIDR)},
 		})
 	}
 	return out
@@ -416,7 +434,7 @@ func (p *Plugin) handleWGHubPeers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	peers = append(peers, otherConfiguredHubPeers(allHubs, hub.ID)...)
+	peers = append(peers, otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR)...)
 	for _, h := range allHubs {
 		if h.ID != hub.ID && h.UpdatedAt.After(revTS) {
 			revTS = h.UpdatedAt
