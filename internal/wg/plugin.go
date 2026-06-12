@@ -134,6 +134,10 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 	if err := p.ensureBundleOSArchColumns(); err != nil {
 		log.Printf("wg: ensure os/arch columns: %v", err)
 	}
+	// P2 egress: hub advertised routes + per-device egress opt-in.
+	if err := p.ensureEgressColumns(); err != nil {
+		log.Printf("wg: ensure egress columns: %v", err)
+	}
 	return p, nil
 }
 
@@ -181,6 +185,7 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 		admin.POST("/wg-tokens", p.handleAdminWGTokenCreate)
 		admin.POST("/wg-tokens/:id/revoke", p.handleAdminWGTokenRevoke)
 		admin.GET("/wg-devices", p.handleAdminWGDeviceList)
+		admin.PUT("/wg-devices/:id", p.handleAdminWGDeviceUpdate)
 		admin.DELETE("/wg-devices/:id", p.handleAdminWGDeviceRemove)
 		admin.GET("/wg-sites", p.handleAdminWGSiteList)
 		admin.GET("/wg-hub-status", p.handleAdminWGHubStatus)

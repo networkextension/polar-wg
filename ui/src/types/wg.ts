@@ -16,6 +16,9 @@ export type WGHub = {
   keepalive_sec: number;
   refresh_sec: number;
   bound_device_id?: number;
+  // P2 egress: operator-declared CIDRs this hub gateways to
+  // (e.g. "192.168.10.0/24", "0.0.0.0/0"). Per-device opt-in.
+  advertised_routes?: string[];
   created_at: string;
   updated_at: string;
 };
@@ -68,6 +71,8 @@ export type WGDevice = {
   lan_addrs?: WGLanAddr[];
   wg_endpoint: string;
   token_expires_at?: string;
+  // P2 egress opt-in: hub whose advertised_routes this device uses.
+  egress_hub_id?: number | null;
   created_at: string;
   last_seen_at?: string;
   removed_at?: string;

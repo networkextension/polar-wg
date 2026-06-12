@@ -35,8 +35,13 @@ type WGHub struct {
 	KeepaliveSec  int       `json:"keepalive_sec"`
 	RefreshSec    int       `json:"refresh_sec"`
 	BoundDeviceID *int64    `json:"bound_device_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	// AdvertisedRoutes — operator-declared egress CIDRs this hub gateways
+	// to (e.g. a datacenter LAN "192.168.10.0/24", or "0.0.0.0/0" full
+	// tunnel). Per-spoke opt-in via wg_devices.egress_hub_id — never
+	// auto-distributed. See doc/wg-multi-hub-routing.md 出口 section.
+	AdvertisedRoutes []string  `json:"advertised_routes,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Configured iff a device has claimed this hub (pubkey + endpoint set).
@@ -46,18 +51,22 @@ func (h *WGHub) Configured() bool {
 	return strings.TrimSpace(h.Pubkey) != ""
 }
 
-const wgHubColumns = `id, slug, label, pubkey, endpoint, wg_ip, mesh_cidr, keepalive_sec, refresh_sec, bound_device_id, created_at, updated_at`
+const wgHubColumns = `id, slug, label, pubkey, endpoint, wg_ip, mesh_cidr, keepalive_sec, refresh_sec, bound_device_id, advertised_routes_json, created_at, updated_at`
 
 func scanWGHub(scanner interface{ Scan(...any) error }) (*WGHub, error) {
 	var h WGHub
 	var bound sql.NullInt64
+	var routesJSON sql.NullString
 	if err := scanner.Scan(&h.ID, &h.Slug, &h.Label, &h.Pubkey, &h.Endpoint, &h.WGIP, &h.MeshCIDR,
-		&h.KeepaliveSec, &h.RefreshSec, &bound, &h.CreatedAt, &h.UpdatedAt); err != nil {
+		&h.KeepaliveSec, &h.RefreshSec, &bound, &routesJSON, &h.CreatedAt, &h.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if bound.Valid {
 		v := bound.Int64
 		h.BoundDeviceID = &v
+	}
+	if routesJSON.Valid && routesJSON.String != "" {
+		_ = json.Unmarshal([]byte(routesJSON.String), &h.AdvertisedRoutes)
 	}
 	return &h, nil
 }
@@ -195,13 +204,18 @@ func (p *Plugin) updateWGHub(h *WGHub, now time.Time) (*WGHub, error) {
 	if h.RefreshSec <= 0 {
 		h.RefreshSec = 300
 	}
+	var routesJSON []byte
+	if len(h.AdvertisedRoutes) > 0 {
+		routesJSON, _ = json.Marshal(h.AdvertisedRoutes)
+	}
 	_, err := p.DB.Exec(
 		`UPDATE wg_hubs
 		    SET label = $2, endpoint = $3, wg_ip = $4, mesh_cidr = $5,
-		        keepalive_sec = $6, refresh_sec = $7, updated_at = $8
+		        keepalive_sec = $6, refresh_sec = $7, advertised_routes_json = $8,
+		        updated_at = $9
 		  WHERE id = $1`,
 		h.ID, strings.TrimSpace(h.Label), strings.TrimSpace(h.Endpoint), h.WGIP, h.MeshCIDR,
-		h.KeepaliveSec, h.RefreshSec, now,
+		h.KeepaliveSec, h.RefreshSec, nullJSONB(routesJSON), now,
 	)
 	if err != nil {
 		return nil, err
@@ -464,6 +478,17 @@ func (p *Plugin) createWGTokenForHub(label, createdByUserID, hubSlug, hubLabel, 
 		return nil, nil, err
 	}
 	if hub == nil {
+		// Mint-time disjointness guard: cross-hub routing (P1) requires
+		// every hub's /24 to be unique; an operator-supplied mesh_cidr
+		// colliding with an existing hub would make route ownership
+		// ambiguous. suggestFreeMeshCIDR-picked values pass trivially.
+		allHubs, lerr := p.listWGHubs()
+		if lerr != nil {
+			return nil, nil, lerr
+		}
+		if verr := validateMeshCIDRDisjoint(meshCIDR, allHubs, 0); verr != nil {
+			return nil, nil, verr
+		}
 		hub, err = p.createWGHub(hubSlug, hubLabel, publicEndpoint, meshCIDR)
 		if err != nil {
 			return nil, nil, err
@@ -586,11 +611,15 @@ type WGDevice struct {
 	WGEndpoint     string      `json:"wg_endpoint"`
 	TokenHash      string      `json:"-"`
 	TokenExpiresAt *time.Time  `json:"token_expires_at,omitempty"`
-	CreatedAt      time.Time   `json:"created_at"`
-	LastSeenAt     *time.Time  `json:"last_seen_at,omitempty"`
-	RemovedAt      *time.Time  `json:"removed_at,omitempty"`
-	SiteSlug       string      `json:"site_slug,omitempty"`
-	HubSlug        string      `json:"hub_slug,omitempty"`
+	// EgressHubID — per-device egress opt-in: the hub whose
+	// advertised_routes this device wants. NULL/nil = no egress.
+	// 0.0.0.0/0 only takes effect when this equals the device's own hub.
+	EgressHubID *int64     `json:"egress_hub_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
+	RemovedAt   *time.Time `json:"removed_at,omitempty"`
+	SiteSlug    string     `json:"site_slug,omitempty"`
+	HubSlug     string     `json:"hub_slug,omitempty"`
 }
 
 // scanWGDevice supports two column shapes used in different queries.
@@ -599,11 +628,13 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 	var d WGDevice
 	var lanJSON sql.NullString
 	var tokenExpiresAt, lastSeenAt, removedAt sql.NullTime
+	var egressHubID sql.NullInt64
 	var siteSlug, hubSlug sql.NullString
 	dest := []any{
 		&d.ID, &d.DeviceID, &d.HubID, &d.SiteID, &d.DIndex, &d.DeviceIP, &d.Pubkey,
 		&d.Hostname, &d.OS, &d.Arch, &d.AgentVer, &d.WGListenPort, &lanJSON, &d.WGEndpoint,
 		&d.TokenHash, &tokenExpiresAt, &d.CreatedAt, &lastSeenAt, &removedAt, &d.HostID,
+		&egressHubID,
 	}
 	if hasSlug {
 		dest = append(dest, &siteSlug, &hubSlug)
@@ -613,6 +644,10 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 	}
 	if lanJSON.Valid && lanJSON.String != "" {
 		_ = json.Unmarshal([]byte(lanJSON.String), &d.LANAddrs)
+	}
+	if egressHubID.Valid {
+		v := egressHubID.Int64
+		d.EgressHubID = &v
 	}
 	if tokenExpiresAt.Valid {
 		v := tokenExpiresAt.Time
@@ -637,7 +672,7 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 	return &d, nil
 }
 
-const wgDeviceColumns = `id, device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver, wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, last_seen_at, removed_at, host_id`
+const wgDeviceColumns = `id, device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver, wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, last_seen_at, removed_at, host_id, egress_hub_id`
 
 func (p *Plugin) getWGDeviceByID(id int64) (*WGDevice, error) {
 	row := p.DB.QueryRow(`SELECT `+wgDeviceColumns+` FROM wg_devices WHERE id = $1`, id)
@@ -684,7 +719,7 @@ func (p *Plugin) listWGDevices(includeRemoved bool) ([]WGDevice, error) {
 	q := `SELECT d.id, d.device_id, d.hub_id, d.site_id, d.d_index, d.device_ip, d.pubkey,
 	             d.hostname, d.os, d.arch, d.agent_ver, d.wg_listen_port, d.lan_addrs_json,
 	             d.wg_endpoint, d.token_hash, d.token_expires_at, d.created_at, d.last_seen_at,
-	             d.removed_at, d.host_id, s.slug, h.slug
+	             d.removed_at, d.host_id, d.egress_hub_id, s.slug, h.slug
 	        FROM wg_devices d
 	   LEFT JOIN wg_sites s ON s.id = d.site_id
 	   LEFT JOIN wg_hubs  h ON h.id = d.hub_id`
@@ -756,6 +791,27 @@ func (p *Plugin) listWGDevicesInSite(siteID, excludeID int64) ([]WGDevice, error
 		out = append(out, *d)
 	}
 	return out, rows.Err()
+}
+
+// updateWGDeviceEgressHub sets (or clears, with nil) a device's egress
+// opt-in. The egress hub must exist; cross-hub vs own-hub semantics are
+// enforced at the handler layer (full tunnel only via own hub).
+func (p *Plugin) updateWGDeviceEgressHub(deviceID int64, egressHubID *int64) error {
+	var v any
+	if egressHubID != nil {
+		v = *egressHubID
+	}
+	res, err := p.DB.Exec(
+		`UPDATE wg_devices SET egress_hub_id = $2 WHERE id = $1 AND removed_at IS NULL`,
+		deviceID, v,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (p *Plugin) markWGDeviceRemoved(id int64, now time.Time) error {

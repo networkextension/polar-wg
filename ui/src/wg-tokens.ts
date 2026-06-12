@@ -20,6 +20,8 @@ import {
   resetWGHubBind,
   revokeWGToken,
   setWGBundleLatest,
+  updateWGDeviceEgress,
+  updateWGHub,
   uploadWGBundle,
 } from "./api/wg.js";
 import { logout } from "@networkextension/polar-ui-common/api/session";
@@ -473,11 +475,16 @@ function hubStatus(h: WGHub): string {
 
 function renderHubRow(h: WGHub): HTMLTableRowElement {
   const tr = document.createElement("tr");
+  const routes = h.advertised_routes ?? [];
+  const routesCell = routes.length
+    ? routes.map((r) => `<code>${r}</code>`).join(", ")
+    : "—";
   const cells = [
     `<code>${h.slug}</code>`,
     h.label || "—",
     `<code>${h.endpoint || "—"}</code>`,
     `<code>${h.mesh_cidr}</code>`,
+    routesCell,
     hubStatus(h),
     h.bound_device_id ? `<a href="#" data-jump-device="${h.bound_device_id}">dev#${h.bound_device_id}</a>` : "—",
   ];
@@ -488,6 +495,40 @@ function renderHubRow(h: WGHub): HTMLTableRowElement {
   });
   const cellActions = document.createElement("td");
   cellActions.style.whiteSpace = "nowrap";
+  // P2 egress: edit the hub's advertised routes (comma-separated CIDRs).
+  const egressBtn = document.createElement("button");
+  egressBtn.type = "button";
+  egressBtn.className = "btn-inline btn-secondary";
+  egressBtn.textContent = "出口";
+  egressBtn.title = "声明这个 hub 能网关到的外部 CIDR（如机房内网）；0.0.0.0/0 = 全隧道。设备侧在 Devices 标签 per-device 选用。";
+  egressBtn.style.marginRight = "4px";
+  egressBtn.addEventListener("click", async () => {
+    const input = window.prompt(
+      "出口路由（逗号分隔 CIDR；0.0.0.0/0 = 全隧道出口；留空 = 清除）：",
+      routes.join(", "),
+    );
+    if (input === null) return;
+    const next = input
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    try {
+      // Backend overwrites label/endpoint unconditionally — echo them.
+      const { data } = await updateWGHub(h.id, {
+        label: h.label,
+        endpoint: h.endpoint,
+        advertised_routes: next,
+      });
+      if (data.error) {
+        window.alert(data.error);
+        return;
+      }
+      await refreshHubs();
+    } catch (err) {
+      window.alert((err as Error).message);
+    }
+  });
+  cellActions.appendChild(egressBtn);
   if (h.bound_device_id) {
     const resetBtn = document.createElement("button");
     resetBtn.type = "button";
@@ -848,6 +889,62 @@ function deviceStatus(dev: WGDevice): string {
   return base;
 }
 
+// renderDeviceEgressCell — P2 egress opt-in dropdown. Options = hubs that
+// declared advertised_routes. Own-hub options carry full-tunnel rights;
+// cross-hub options route subnets only (0.0.0.0/0 stripped server-side).
+function renderDeviceEgressCell(dev: WGDevice): HTMLTableCellElement {
+  const td = document.createElement("td");
+  if (dev.removed_at) {
+    td.textContent = "—";
+    return td;
+  }
+  const candidates = hubsCache.filter((h) => (h.advertised_routes ?? []).length > 0);
+  if (candidates.length === 0 && !dev.egress_hub_id) {
+    td.textContent = "—";
+    td.title = "没有 hub 声明出口路由（在 Hubs 标签点「出口」配置）";
+    return td;
+  }
+  const sel = document.createElement("select");
+  sel.className = "btn-inline";
+  const offOpt = document.createElement("option");
+  offOpt.value = "";
+  offOpt.textContent = "关闭";
+  sel.appendChild(offOpt);
+  for (const h of candidates) {
+    const opt = document.createElement("option");
+    opt.value = String(h.id);
+    const kind = h.id === dev.hub_id ? "本hub" : "跨hub仅子网";
+    opt.textContent = `${h.slug}（${kind}）`;
+    opt.title = (h.advertised_routes ?? []).join(", ");
+    sel.appendChild(opt);
+  }
+  // Current selection may point at a hub that since cleared its routes —
+  // keep it visible so the operator can see + turn it off.
+  if (dev.egress_hub_id && !candidates.some((h) => h.id === dev.egress_hub_id)) {
+    const opt = document.createElement("option");
+    opt.value = String(dev.egress_hub_id);
+    opt.textContent = `#${dev.egress_hub_id}（已无出口路由）`;
+    sel.appendChild(opt);
+  }
+  sel.value = dev.egress_hub_id ? String(dev.egress_hub_id) : "";
+  sel.addEventListener("change", async () => {
+    const next = sel.value ? Number(sel.value) : null;
+    try {
+      const { data } = await updateWGDeviceEgress(dev.id, next);
+      if (data.error) {
+        window.alert(data.error);
+        await refreshDevices();
+        return;
+      }
+    } catch (err) {
+      window.alert(`设置出口失败：${(err as Error).message}`);
+      await refreshDevices();
+    }
+  });
+  td.appendChild(sel);
+  return td;
+}
+
 function renderDeviceRow(dev: WGDevice): HTMLTableRowElement {
   const tr = document.createElement("tr");
   if (dev.removed_at) tr.style.opacity = "0.5";
@@ -870,6 +967,7 @@ function renderDeviceRow(dev: WGDevice): HTMLTableRowElement {
     td.innerHTML = html;
     tr.appendChild(td);
   });
+  tr.appendChild(renderDeviceEgressCell(dev));
   const cellActions = document.createElement("td");
   if (!dev.removed_at) {
     const btn = document.createElement("button");
@@ -1057,9 +1155,9 @@ uploadBundleSubmitBtn?.addEventListener("click", async () => {
 // ---- initial load ----
 
 void refreshStatus();
-void refreshHubs();
+// Devices render an egress dropdown built from hubsCache — load hubs first.
+void refreshHubs().then(() => refreshDevices());
 void refreshTokens();
-void refreshDevices();
 void refreshBundles();
 // devices fetch primes the pubkey→device map for the Status tab's
 // peer rows. Best-effort: status will show raw pubkey until this
