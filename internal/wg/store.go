@@ -849,29 +849,6 @@ func (p *Plugin) updateWGDeviceTokenHash(id int64, newHash string, expiresAt *ti
 	return err
 }
 
-// otherSiteIndices returns distinct s_index in same hub, excluding
-// the given site. Used by /v1/peers to compute hub peer's
-// allowed_extra (other-site /24s routed via hub).
-func (p *Plugin) otherSiteIndicesInHub(hubID, excludeSiteID int64) ([]int, error) {
-	rows, err := p.DB.Query(
-		`SELECT DISTINCT s_index FROM wg_sites WHERE hub_id = $1 AND id <> $2 ORDER BY s_index`,
-		hubID, excludeSiteID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]int, 0)
-	for rows.Next() {
-		var v int
-		if err := rows.Scan(&v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
-}
-
 // ---- bundles ---- (unchanged shape, see Phase 1)
 
 type WGBundle struct {
