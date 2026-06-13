@@ -125,21 +125,22 @@ P1 cross-hub 路由零 schema 改动。
   内嵌的渲染器本来就会写 `endpoint` + `allowed_extra` → **装机即获得 hub fabric**。
   install.sh 同时在 `role=hub` 时开启 IP 转发(darwin `net.inet.ip.forwarding=1` /
   linux `net.ipv4.ip_forward=1`,并写入 sysctl.conf 持久化)。
-- **Hub 节点 — 后续刷新(需要客户端跟进)**:wgctl-agent 周期 poll 的 `/v1/hub/peers`
-  现在会多返回其他 hub 的条目(新增 `endpoint` + `allowed_extra` 字段)。消费它的
-  **wgctl / wg-mac 客户端(独立 C 代码库,不在本 repo)** 需要学会渲染这些字段,否则
-  agent 的下一次 conf 重写会把初始 conf 里的 fabric peer 降级(丢 endpoint/AllowedIPs)。
-  在客户端落地前:装机时 fabric 生效,但 hub roster 变化(新增/换 endpoint)要重跑
-  install 或手动改 conf 才能跟上。
+- **Hub 节点 — 后续刷新(已验证客户端兼容,零改动)**:wgctl-agent 周期 poll 的
+  `/v1/hub/peers` 现在会多返回其他 hub 的条目(新增 `endpoint` + `allowed_extra`
+  字段)。客户端在 `networkextension/polar-wg-app` —— 经核对其两条渲染路径
+  (`scripts/join.sh` 初始 conf、`scripts/wgctl-agent.sh` 周期重写)都是**通用 peer
+  渲染**:对每个条目读 `pubkey` / `wg_ip` / `endpoint` / `allowed_extra`,hub 与
+  device 角色共用同一段代码(role 只切 URL)。新字段 key 与渲染器已读的 key 完全
+  一致 → hub roster 变化(新增 hub / 换 endpoint / 改出口)在下一次 agent poll 即
+  生效,**无需重装,无需客户端改动**。
 
 ## 一致性 / 防环
 
 - Hub 全互联是**完全图**,但 wireguard 路由按 AllowedIPs 最长前缀匹配,每个目标 /24
   只属于唯一一个 hub → 不会成环。前提:**各 hub 的 `mesh_cidr` 互不重叠**。
-- 保证来源:`suggestFreeMeshCIDR` 从 `100.64.0.0/10` 挑空闲 /24。但
-  `createWGHub`/`updateWGHub` 默认 `100.64.0.0/24` 且 `mesh_cidr_pref` 运营商可自填,
-  两个手建 hub 理论上可能撞同一 /24。两个纯函数已**防御性跳过** /24 与已输出项重复的
-  hub;建议(本 PR 可选,否则跟进)在 hub-token 铸造处加一条 mesh_cidr 重叠校验。
+- 保证来源:`suggestFreeMeshCIDR` 从 `100.64.0.0/10` 挑空闲 /24;P2 起
+  `validateMeshCIDRDisjoint` 在 hub-token 铸造与 hub 更新两条路径强制校验运营商
+  自填的 mesh_cidr 不与任何现有 hub 重叠。纯函数侧仍保留防御性跳过(双保险)。
 
 ## Phasing
 
@@ -147,9 +148,10 @@ P1 cross-hub 路由零 schema 改动。
   `crossHubAllowedExtra` / `otherConfiguredHubPeers`;`buildPeerListResponse` 改造
   (spoke 侧 widening + hub-self fabric 分支);`handleWGHubPeers` / `wgHubPeerEntry`
   (hub 刷新合约);install.sh hub 角色开 IP 转发。复用 `listWGHubs()`,零 schema
-  改动。spoke 侧 + hub 初始 conf 即时生效;hub 刷新合约就绪,等客户端跟进。
-- **P1-client(跟进)** wgctl-agent 渲染 `/v1/hub/peers` 新增的 hub-peer 条目
-  (`endpoint` + `allowed_extra`),使 hub roster 变化无需重装即可跟进。
+  改动。spoke 侧 + hub 初始 conf 即时生效。
+- **P1-client(已验证为 no-op)** polar-wg-app 的 join.sh / wgctl-agent.sh 渲染器
+  本就通用读 `endpoint` + `allowed_extra`,与新字段 key 一致 —— 客户端零改动,
+  整个系列端到端 client-complete。见上文「客户端影响」节。
 - **P2(已实现)** `advertised_routes_json` 出口路由 + per-device `egress_hub_id`
   选择 + mesh_cidr 重叠校验 + admin API/UI。见上文「出口」节。
 - **P3(已实现)** 拓扑图标注:hub 节点下方显示 owned mesh_cidr;声明了出口路由的
