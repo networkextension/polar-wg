@@ -499,9 +499,16 @@ type wgHubPeerEntry struct {
 }
 
 type wgHubPeersResponse struct {
-	Peers      []wgHubPeerEntry `json:"peers"`
-	Rev        string           `json:"rev"`
-	RefreshSec int              `json:"refresh_sec"`
+	Peers []wgHubPeerEntry `json:"peers"`
+	Rev   string           `json:"rev"`
+	// AdvertisedRoutes — this hub's own egress CIDRs (operator-declared,
+	// from wg_hubs.advertised_routes). Mirrored back to the hub so its
+	// reconciler can semi-automatically stand up egress NAT (MASQUERADE
+	// mesh -> uplink) when non-empty, and tear it down when emptied. The
+	// platform "opens egress" by setting these; the hub just receives the
+	// parameter and acts. Empty/omitted → the hub does no NAT.
+	AdvertisedRoutes []string `json:"advertised_routes,omitempty"`
+	RefreshSec       int      `json:"refresh_sec"`
 }
 
 func (p *Plugin) handleWGHubPeers(c *gin.Context) {
@@ -555,9 +562,10 @@ func (p *Plugin) handleWGHubPeers(c *gin.Context) {
 	}
 	rev := strconv.FormatInt(revTS.UnixNano(), 10) + "-" + strconv.Itoa(len(peers))
 	c.JSON(http.StatusOK, wgHubPeersResponse{
-		Peers:      peers,
-		Rev:        rev,
-		RefreshSec: hub.RefreshSec,
+		Peers:            peers,
+		Rev:              rev,
+		AdvertisedRoutes: hub.AdvertisedRoutes,
+		RefreshSec:       hub.RefreshSec,
 	})
 }
 
