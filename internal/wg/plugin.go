@@ -43,7 +43,6 @@ type Plugin struct {
 	Name       string
 	Listen     string
 	Ver        string
-	UploadDir  string // wg-svc-local bundle blob root (e.g. /Users/local/wg-svc-data)
 	MetricsTok string // Bearer token for /metrics; empty = endpoint 404
 
 	metrics   *wgMetrics
@@ -62,7 +61,6 @@ type Config struct {
 	PluginToken  string
 	Listen       string
 	BuildVersion string
-	UploadDir    string
 	MetricsToken string
 }
 
@@ -82,9 +80,6 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 	}
 	if strings.TrimSpace(cfg.PluginToken) == "" {
 		return nil, errors.New("wg.New: PluginToken required (plaintext from /admin-plugins.html)")
-	}
-	if strings.TrimSpace(cfg.UploadDir) == "" {
-		return nil, errors.New("wg.New: UploadDir required (wg-svc-local data root)")
 	}
 
 	db, err := sql.Open("postgres", cfg.DBDSN)
@@ -119,14 +114,12 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 		Name:       cfg.PluginName,
 		Listen:     cfg.Listen,
 		Ver:        cfg.BuildVersion,
-		UploadDir:  cfg.UploadDir,
 		MetricsTok: cfg.MetricsToken,
 		metrics:    newWGMetrics(),
 		startedAt:  time.Now(),
 	}
-	// Assets migration: ensure wg_bundles.asset_id exists (the table
-	// predates the assets catalog). Non-fatal — bundles still serve from
-	// local disk if this fails.
+	// ensure wg_bundles.asset_id exists (the table predates the assets
+	// catalog). Non-fatal, but downloads need it — bundles serve from assets.
 	if err := p.ensureBundleAssetColumn(); err != nil {
 		log.Printf("wg: ensure asset_id column: %v", err)
 	}
@@ -193,9 +186,6 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 		admin.GET("/wg-bundles", p.handleAdminWGBundleList)
 		admin.POST("/wg-bundles/:id/set-latest", p.handleAdminWGBundleSetLatest)
 		admin.DELETE("/wg-bundles/:id", p.handleAdminWGBundleDelete)
-		// Assets migration: upload any local-only bundle blobs into the
-		// central assets catalog + record asset_id (idempotent).
-		admin.POST("/wg-bundles/backfill-assets", p.handleAdminWGBundleBackfillAssets)
 	}
 }
 
@@ -203,7 +193,6 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 // Returns when ctx is cancelled.
 func (p *Plugin) Start(ctx context.Context) {
 	go p.heartbeatLoop(ctx)
-	go p.backfillBundleAssetsOnce() // self-migrate any local-only bundles to assets
 	p.startWGStaleDeviceGC(ctx)
 	p.startHubStatusPoll(ctx)
 	p.startHubLocalSelfPoll(ctx)
