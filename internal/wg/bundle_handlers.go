@@ -2,10 +2,9 @@ package wg
 
 // /api/admin/wg-bundles upload + /v1/bundle download.
 //
-// Storage is the central polar-assets catalog (single-write): uploads go
-// straight to assets via the SDK, never to wg-svc-local disk. Legacy
-// rows with a file:// blob_uri still read from local disk until the
-// one-time backfill migrates them. See
+// Storage is the central polar-assets catalog, exclusively: uploads
+// stream straight to assets via the SDK and downloads serve from assets.
+// No wg-svc-local blob storage. See
 // doc/arch/blob-storage-to-assets-migration.md (polar-dock).
 
 import (
@@ -14,8 +13,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,10 +20,6 @@ import (
 	"github.com/gin-gonic/gin"
 	sdk "github.com/networkextension/polar-sdk"
 )
-
-func (p *Plugin) wgBundleBlobDirAbs() string {
-	return filepath.Join(p.UploadDir, "wg-bundles")
-}
 
 // POST /api/admin/wg-bundles/upload — multipart form.
 // Fields:
@@ -181,11 +174,8 @@ func (p *Plugin) handleAdminWGBundleDelete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
-	// Best-effort blob unlink; ignore failure (file may already be gone
-	// or shared with another bundle row in a hypothetical future).
-	if abs, err := p.resolveWGBundleBlobPath(b); err == nil {
-		_ = os.Remove(abs)
-	}
+	// Bytes live in the central assets catalog (content-addressed, possibly
+	// shared via dedup); we drop only the wg_bundles row, not the asset.
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -243,20 +233,10 @@ func (p *Plugin) handleWGBundleDownload(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no bundle %s for %s/%s", version, os, archOrAny(arch))})
 		return
 	}
-	// Dual-read: prefer the central assets catalog; fall back to the local
-	// blob if the bundle hasn't been migrated yet (or assets is down).
-	if p.streamBundleFromAssets(c, b) {
-		return
+	// Assets-only: the bundle bytes live in the central catalog.
+	if !p.streamBundleFromAssets(c, b) {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "bundle blob unavailable from assets"})
 	}
-	abs, err := p.resolveWGBundleBlobPath(b)
-	if err != nil {
-		c.JSON(http.StatusGone, gin.H{"error": err.Error()})
-		return
-	}
-	c.Header("Cache-Control", "public, max-age=31536000, immutable")
-	c.Header("Content-Type", "application/gzip")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, bundleFilename(b)))
-	c.File(abs)
 }
 
 // bundleFilename names the download by platform, e.g. wg-darwin-arm64-<ver>.tar.gz
@@ -267,22 +247,4 @@ func bundleFilename(b *WGBundle) string {
 		mid += "-" + b.Arch
 	}
 	return fmt.Sprintf("wg-%s-%s.tar.gz", mid, sanitizeFilename(b.Version))
-}
-
-// resolveWGBundleBlobPath canonicalizes the row's file:// URI and
-// confirms it lives under the wg-bundles dir. Defends against hand-
-// crafted DB rows pointing at /etc/passwd.
-func (p *Plugin) resolveWGBundleBlobPath(b *WGBundle) (string, error) {
-	if !strings.HasPrefix(b.BlobURI, "file://") {
-		return "", errors.New("blob is not locally stored (remote URI)")
-	}
-	abs := strings.TrimPrefix(b.BlobURI, "file://")
-	canon, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", errors.New("bundle blob file missing on disk")
-	}
-	if !strings.HasPrefix(canon, p.wgBundleBlobDirAbs()+string(filepath.Separator)) {
-		return "", errors.New("blob path outside the wg-bundles dir")
-	}
-	return canon, nil
 }
