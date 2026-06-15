@@ -136,6 +136,35 @@
                 </div>
               </div>
             </div>
+
+            <div class="lp-preview-main" style="margin-top:16px;">
+              <div class="lp-preview-head">
+                <span class="badge">跨 Hub 路由发布</span>
+                <span id="hubLinksSummary" class="lp-mode-badge">—</span>
+              </div>
+              <div class="lp-preview-body">
+                <p class="meta-subtitle" style="margin: 0 0 12px 0;">
+                  路由不再自动全互联：只有在此<strong>显式发布 link</strong> 的两个 hub 之间,才会互相分发各自的 /24。
+                  发布 = 新增一条 link;取消发布 = 删除它。
+                </p>
+                <div style="display:flex; gap:6px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+                  <select id="linkHubA" class="lp-input"></select>
+                  <span>↔</span>
+                  <select id="linkHubB" class="lp-input"></select>
+                  <button id="publishLinkBtn" class="btn-inline" type="button">发布 link</button>
+                  <span id="linkPublishMsg" class="meta-subtitle"></span>
+                </div>
+                <table id="hubLinksTable" class="lp-table" hidden>
+                  <thead>
+                    <tr><th>Hub A</th><th>Hub B</th><th>发布时间</th><th></th></tr>
+                  </thead>
+                  <tbody id="hubLinksTbody"></tbody>
+                </table>
+                <div id="hubLinksEmpty" class="meta-subtitle" hidden>
+                  暂无已发布的跨 hub link —— 当前各 mesh 互相隔离(不跨 hub 路由)。
+                </div>
+              </div>
+            </div>
           </section>
 
           <!-- Tokens tab -->

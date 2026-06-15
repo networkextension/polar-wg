@@ -7,6 +7,8 @@ import type {
   WGDevice,
   WGDeviceListResponse,
   WGHub,
+  WGHubLinkListResponse,
+  WGHubLinkResponse,
   WGHubListResponse,
   WGHubResponse,
   WGHubStatusResponse,
@@ -30,6 +32,25 @@ export async function updateWGHub(id: number, payload: Partial<WGHub>) {
 
 export async function deleteWGHub(id: number) {
   return requestJson<{ ok: boolean; error?: string }>(`/api/admin/wg-hubs/${id}`, {
+    method: "DELETE",
+  });
+}
+
+// ---- cross-hub links (route publishing) ----
+
+export async function listWGHubLinks() {
+  return requestJson<WGHubLinkListResponse>("/api/admin/wg-hub-links");
+}
+
+export async function createWGHubLink(hub_a_id: number, hub_b_id: number) {
+  return requestJson<WGHubLinkResponse>("/api/admin/wg-hub-links", {
+    method: "POST",
+    body: { hub_a_id, hub_b_id },
+  });
+}
+
+export async function deleteWGHubLink(id: number) {
+  return requestJson<{ ok: boolean; error?: string }>(`/api/admin/wg-hub-links/${id}`, {
     method: "DELETE",
   });
 }

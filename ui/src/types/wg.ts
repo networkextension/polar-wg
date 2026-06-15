@@ -94,6 +94,18 @@ export type WGBundle = {
 
 export type WGHubListResponse = ErrorResponse & { hubs?: WGHub[] };
 export type WGHubResponse = ErrorResponse & { hub?: WGHub };
+
+export type WGHubLink = {
+  id: number;
+  hub_a_id: number;
+  hub_b_id: number;
+  hub_a_slug?: string;
+  hub_b_slug?: string;
+  created_at: string;
+};
+export type WGHubLinkListResponse = ErrorResponse & { links?: WGHubLink[] };
+export type WGHubLinkResponse = ErrorResponse & { link?: WGHubLink };
+
 export type WGTokenListResponse = ErrorResponse & { tokens?: WGToken[] };
 export type WGTokenCreateResponse = ErrorResponse & { token?: WGToken; hub?: WGHub; warning?: string };
 export type WGDeviceListResponse = ErrorResponse & { devices?: WGDevice[] };
