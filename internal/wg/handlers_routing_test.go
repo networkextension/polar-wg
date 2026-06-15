@@ -33,6 +33,7 @@ func TestCrossHubAllowedExtra(t *testing.T) {
 		allHubs   []WGHub
 		ownHubID  int64
 		ownCIDR   string
+		skip      map[int64]bool
 		want      []string
 	}{
 		{
@@ -70,10 +71,18 @@ func TestCrossHubAllowedExtra(t *testing.T) {
 			ownCIDR:  "100.64.0.0/24",
 			want:     []string{"100.64.1.0/24"},
 		},
+		{
+			name:     "dual-homed host skips its other direct hub",
+			allHubs:  []WGHub{hubA, hubB, hubC},
+			ownHubID: 1,
+			ownCIDR:  "100.64.0.0/24",
+			skip:     map[int64]bool{2: true}, // host is also a direct member of hubB
+			want:     []string{"100.64.2.0/24"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := crossHubAllowedExtra(tt.allHubs, tt.ownHubID, tt.ownCIDR)
+			got := crossHubAllowedExtra(tt.allHubs, tt.ownHubID, tt.ownCIDR, tt.skip)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("crossHubAllowedExtra = %v, want %v", got, tt.want)
 			}

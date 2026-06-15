@@ -250,7 +250,14 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		if mesh, err := parseMeshCIDR(hub.MeshCIDR); err == nil {
 			allowedExtra = append(allowedExtra, mesh.ipnet.String())
 		}
-		allowedExtra = append(allowedExtra, crossHubAllowedExtra(allHubs, hub.ID, hub.MeshCIDR)...)
+		// Drop a cross-hub /24 for any mesh this spoke's host already joins
+		// directly (dual-homed box): otherwise its two wg interfaces collide
+		// on the same /24 route and the second wg-quick up fails.
+		skipHubIDs, err := p.hubIDsForHost(dev.HostID, dev.Hostname)
+		if err != nil {
+			return nil, fmt.Errorf("host hub lookup: %w", err)
+		}
+		allowedExtra = append(allowedExtra, crossHubAllowedExtra(allHubs, hub.ID, hub.MeshCIDR, skipHubIDs)...)
 		// P2 egress opt-in: the egress hub's advertised routes ride the
 		// own-hub peer too (cross-hub traffic transits the fabric).
 		allowedExtra = append(allowedExtra, egressAllowedExtra(dev.EgressHubID, hub, allHubs)...)
@@ -348,10 +355,19 @@ func otherConfiguredHubs(allHubs []WGHub, ownHubID int64, ownCIDR string) []WGHu
 	return out
 }
 
-func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string) []string {
+// crossHubAllowedExtra widens a spoke's own-hub peer with every OTHER hub's
+// /24 so cross-hub traffic routes via the own hub into the fabric. skipHubIDs
+// drops any hub whose mesh the spoke's HOST is already a DIRECT member of
+// (a dual-homed box with its own wg interface into that mesh) — otherwise both
+// interfaces would claim the same /24 route and the second `wg-quick up` aborts
+// with "File exists". Pass nil to keep every cross-hub /24.
+func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string, skipHubIDs map[int64]bool) []string {
 	hubs := otherConfiguredHubs(allHubs, ownHubID, ownCIDR)
 	out := make([]string, 0, len(hubs))
 	for _, h := range hubs {
+		if skipHubIDs[h.ID] {
+			continue
+		}
 		out = append(out, hubMeshNetwork(h.MeshCIDR))
 	}
 	return out

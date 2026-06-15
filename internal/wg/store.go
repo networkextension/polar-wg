@@ -793,6 +793,39 @@ func (p *Plugin) listWGDevicesInSite(siteID, excludeID int64) ([]WGDevice, error
 	return out, rows.Err()
 }
 
+// hubIDsForHost returns the set of hub IDs that have a live device on the same
+// physical host — matched by host_id when present, falling back to hostname.
+// Used to suppress a cross-hub /24 for a mesh the host already joins directly
+// (a dual-homed box). Over-matching on a duplicate hostname only drops a
+// redundant cross-route, never a security boundary, so the fallback is safe.
+func (p *Plugin) hubIDsForHost(hostID, hostname string) (map[int64]bool, error) {
+	out := map[int64]bool{}
+	hostID = strings.TrimSpace(hostID)
+	hostname = strings.TrimSpace(hostname)
+	if hostID == "" && hostname == "" {
+		return out, nil
+	}
+	rows, err := p.DB.Query(
+		`SELECT DISTINCT hub_id
+		   FROM wg_devices
+		  WHERE removed_at IS NULL
+		    AND ( ($1 <> '' AND host_id = $1) OR ($2 <> '' AND hostname = $2) )`,
+		hostID, hostname,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // updateWGDeviceEgressHub sets (or clears, with nil) a device's egress
 // opt-in. The egress hub must exist; cross-hub vs own-hub semantics are
 // enforced at the handler layer (full tunnel only via own hub).
