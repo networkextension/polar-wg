@@ -7,12 +7,15 @@
 //   - 📦 Bundles  — list + upload + mark-latest
 
 import {
+  createWGHubLink,
   createWGTokenForDevice,
   createWGTokenForHub,
   deleteWGBundle,
   deleteWGHub,
+  deleteWGHubLink,
   listWGBundles,
   listWGDevices,
+  listWGHubLinks,
   listWGHubs,
   listWGHubStatus,
   listWGTokens,
@@ -33,6 +36,7 @@ import type {
   WGBundle,
   WGDevice,
   WGHub,
+  WGHubLink,
   WGHubIfaceNet,
   WGHubPeerSample,
   WGHubStatusRow,
@@ -593,11 +597,98 @@ async function refreshHubs(): Promise<void> {
     hubsEmpty.hidden = items.length !== 0;
     // Keep token-create hub dropdown in sync.
     syncTokenCreateHubDropdown();
+    // Cross-hub link publishing: populate the picker + refresh the link list.
+    populateLinkHubSelects(items);
+    void refreshHubLinks();
   } catch (err) {
     hubsEmpty.hidden = false;
     hubsEmpty.textContent = `加载失败：${(err as Error).message}`;
   }
 }
+
+// ---- cross-hub link publishing ----
+
+const linkHubA = byId<HTMLSelectElement>("linkHubA");
+const linkHubB = byId<HTMLSelectElement>("linkHubB");
+const publishLinkBtn = byId<HTMLButtonElement>("publishLinkBtn");
+const linkPublishMsg = byId<HTMLElement>("linkPublishMsg");
+const hubLinksTable = byId<HTMLTableElement>("hubLinksTable");
+const hubLinksTbody = byId<HTMLTableSectionElement>("hubLinksTbody");
+const hubLinksEmpty = byId<HTMLElement>("hubLinksEmpty");
+const hubLinksSummary = byId<HTMLElement>("hubLinksSummary");
+
+function populateLinkHubSelects(hubs: WGHub[]): void {
+  if (!linkHubA || !linkHubB) return;
+  const opts = hubs
+    .map((h) => `<option value="${h.id}">${h.slug} (${h.mesh_cidr})</option>`)
+    .join("");
+  const aVal = linkHubA.value, bVal = linkHubB.value;
+  linkHubA.innerHTML = opts;
+  linkHubB.innerHTML = opts;
+  if (aVal) linkHubA.value = aVal;
+  if (bVal) linkHubB.value = bVal;
+}
+
+async function refreshHubLinks(): Promise<void> {
+  if (!hubLinksTbody || !hubLinksTable || !hubLinksEmpty) return;
+  try {
+    const { data } = await listWGHubLinks();
+    const links = data.links ?? [];
+    hubLinksTbody.innerHTML = "";
+    links.forEach((l) => hubLinksTbody.appendChild(renderHubLinkRow(l)));
+    if (hubLinksSummary) hubLinksSummary.textContent = `${links.length} 条`;
+    hubLinksTable.hidden = links.length === 0;
+    hubLinksEmpty.hidden = links.length !== 0;
+  } catch (err) {
+    hubLinksEmpty.hidden = false;
+    hubLinksEmpty.textContent = `加载失败：${(err as Error).message}`;
+  }
+}
+
+function renderHubLinkRow(l: WGHubLink): HTMLTableRowElement {
+  const tr = document.createElement("tr");
+  const a = l.hub_a_slug ?? String(l.hub_a_id);
+  const b = l.hub_b_slug ?? String(l.hub_b_id);
+  const when = l.created_at ? new Date(l.created_at).toLocaleString() : "—";
+  for (const html of [a, b, when]) {
+    const td = document.createElement("td");
+    td.textContent = html;
+    tr.appendChild(td);
+  }
+  const cellAction = document.createElement("td");
+  const del = document.createElement("button");
+  del.className = "btn-inline btn-secondary";
+  del.textContent = "取消发布";
+  del.addEventListener("click", async () => {
+    if (!confirm(`取消发布 ${a} ↔ ${b} 的跨 hub 路由?`)) return;
+    const { data } = await deleteWGHubLink(l.id);
+    if (data && data.ok === false) {
+      alert(`失败：${data.error ?? "unknown"}`);
+      return;
+    }
+    void refreshHubLinks();
+  });
+  cellAction.appendChild(del);
+  tr.appendChild(cellAction);
+  return tr;
+}
+
+publishLinkBtn?.addEventListener("click", async () => {
+  if (!linkHubA || !linkHubB) return;
+  const a = Number(linkHubA.value), b = Number(linkHubB.value);
+  if (linkPublishMsg) linkPublishMsg.textContent = "";
+  if (!a || !b || a === b) {
+    if (linkPublishMsg) linkPublishMsg.textContent = "请选择两个不同的 hub";
+    return;
+  }
+  const { data } = await createWGHubLink(a, b);
+  if (!data.link) {
+    if (linkPublishMsg) linkPublishMsg.textContent = `失败：${data.error ?? "unknown"}`;
+    return;
+  }
+  if (linkPublishMsg) linkPublishMsg.textContent = "已发布";
+  void refreshHubLinks();
+});
 
 hubsRefreshBtn?.addEventListener("click", () => void refreshHubs());
 

@@ -174,6 +174,10 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 		admin.PUT("/wg-hubs/:id", p.handleAdminWGHubUpdate)
 		admin.DELETE("/wg-hubs/:id", p.handleAdminWGHubDelete)
 		admin.POST("/wg-hubs/:id/reset-bind", p.handleAdminWGHubResetBind)
+		// Cross-hub route publishing: link two hubs to distribute their /24s.
+		admin.GET("/wg-hub-links", p.handleAdminWGHubLinkList)
+		admin.POST("/wg-hub-links", p.handleAdminWGHubLinkCreate)
+		admin.DELETE("/wg-hub-links/:id", p.handleAdminWGHubLinkDelete)
 		admin.GET("/wg-tokens", p.handleAdminWGTokenList)
 		admin.POST("/wg-tokens", p.handleAdminWGTokenCreate)
 		admin.POST("/wg-tokens/:id/revoke", p.handleAdminWGTokenRevoke)

@@ -33,35 +33,56 @@ func TestCrossHubAllowedExtra(t *testing.T) {
 		allHubs   []WGHub
 		ownHubID  int64
 		ownCIDR   string
+		linked    map[int64]bool // hubs the operator has published a link to
 		skip      map[int64]bool
 		want      []string
 	}{
+		{
+			name:     "no published links → no cross-hub routes",
+			allHubs:  []WGHub{hubA, hubB, hubC},
+			ownHubID: 1,
+			ownCIDR:  "100.64.0.0/24",
+			linked:   nil, // nothing published → empty
+			want:     []string{},
+		},
 		{
 			name:     "single hub mesh → no cross-hub routes",
 			allHubs:  []WGHub{hubA},
 			ownHubID: 1,
 			ownCIDR:  "100.64.0.0/24",
+			linked:   map[int64]bool{2: true, 3: true},
 			want:     []string{},
 		},
 		{
-			name:     "three hubs → own excluded, other two /24s",
+			name:     "both other hubs linked → both /24s",
 			allHubs:  []WGHub{hubA, hubB, hubC},
 			ownHubID: 1,
 			ownCIDR:  "100.64.0.0/24",
+			linked:   map[int64]bool{2: true, 3: true},
 			want:     []string{"100.64.1.0/24", "100.64.2.0/24"},
+		},
+		{
+			name:     "only one hub linked → only its /24",
+			allHubs:  []WGHub{hubA, hubB, hubC},
+			ownHubID: 1,
+			ownCIDR:  "100.64.0.0/24",
+			linked:   map[int64]bool{3: true}, // only hubC linked
+			want:     []string{"100.64.2.0/24"},
 		},
 		{
 			name:     "own cidr unnormalized still excludes self",
 			allHubs:  []WGHub{hubA, hubB},
 			ownHubID: 1,
 			ownCIDR:  "100.64.0.7/24", // host bits set; normalizes to .0/24
+			linked:   map[int64]bool{2: true},
 			want:     []string{"100.64.1.0/24"},
 		},
 		{
-			name:     "unbound + endpoint-less hubs skipped",
+			name:     "unbound + endpoint-less hubs skipped even if linked",
 			allHubs:  []WGHub{hubA, hubB, hubUnbound, hubNoEndpoint},
 			ownHubID: 1,
 			ownCIDR:  "100.64.0.0/24",
+			linked:   map[int64]bool{2: true, 4: true, 5: true},
 			want:     []string{"100.64.1.0/24"},
 		},
 		{
@@ -69,6 +90,7 @@ func TestCrossHubAllowedExtra(t *testing.T) {
 			allHubs:  []WGHub{hubA, hubB, hubDup},
 			ownHubID: 1,
 			ownCIDR:  "100.64.0.0/24",
+			linked:   map[int64]bool{2: true, 6: true},
 			want:     []string{"100.64.1.0/24"},
 		},
 		{
@@ -76,13 +98,14 @@ func TestCrossHubAllowedExtra(t *testing.T) {
 			allHubs:  []WGHub{hubA, hubB, hubC},
 			ownHubID: 1,
 			ownCIDR:  "100.64.0.0/24",
+			linked:   map[int64]bool{2: true, 3: true},
 			skip:     map[int64]bool{2: true}, // host is also a direct member of hubB
 			want:     []string{"100.64.2.0/24"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := crossHubAllowedExtra(tt.allHubs, tt.ownHubID, tt.ownCIDR, tt.skip)
+			got := crossHubAllowedExtra(tt.allHubs, tt.ownHubID, tt.ownCIDR, tt.linked, tt.skip)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("crossHubAllowedExtra = %v, want %v", got, tt.want)
 			}
@@ -96,7 +119,7 @@ func TestOtherConfiguredHubPeers(t *testing.T) {
 	hubUnbound := hub(3, "pending", "100.64.2.0/24", "p.example.com:51820", "", "100.64.2.1")
 	hubNoEndpoint := hub(4, "nat", "100.64.3.0/24", "", "PKd", "100.64.3.1")
 
-	got := otherConfiguredHubPeers([]WGHub{hubA, hubB, hubUnbound, hubNoEndpoint}, 1, "100.64.0.0/24")
+	got := otherConfiguredHubPeers([]WGHub{hubA, hubB, hubUnbound, hubNoEndpoint}, 1, "100.64.0.0/24", map[int64]bool{2: true, 3: true, 4: true})
 	want := []wgHubPeerEntry{
 		{
 			Pubkey:       "PKb",
@@ -111,13 +134,13 @@ func TestOtherConfiguredHubPeers(t *testing.T) {
 	}
 
 	// The hub's own row is excluded; a lone hub yields no fabric peers.
-	if peers := otherConfiguredHubPeers([]WGHub{hubA}, 1, "100.64.0.0/24"); len(peers) != 0 {
+	if peers := otherConfiguredHubPeers([]WGHub{hubA}, 1, "100.64.0.0/24", nil); len(peers) != 0 {
 		t.Fatalf("single-hub mesh should produce no other-hub peers, got %+v", peers)
 	}
 
 	// wg_ip already carrying /32 is not double-suffixed.
 	hubWithMask := hub(5, "north", "100.64.4.0/24", "north.example.com:51820", "PKn", "100.64.4.1/32")
-	peers := otherConfiguredHubPeers([]WGHub{hubA, hubWithMask}, 1, "100.64.0.0/24")
+	peers := otherConfiguredHubPeers([]WGHub{hubA, hubWithMask}, 1, "100.64.0.0/24", map[int64]bool{5: true})
 	if len(peers) != 1 || peers[0].WGIP != "100.64.4.1/32" {
 		t.Fatalf("wg_ip /32 handling wrong: %+v", peers)
 	}
@@ -125,7 +148,7 @@ func TestOtherConfiguredHubPeers(t *testing.T) {
 	// A hub whose /24 collides with the OWN hub's must be skipped too
 	// (own CIDR seeds the dedup set in the shared filter).
 	hubOwnDup := hub(6, "shadow", "100.64.0.0/24", "shadow.example.com:51820", "PKs", "100.64.0.9")
-	if peers := otherConfiguredHubPeers([]WGHub{hubA, hubOwnDup}, 1, "100.64.0.0/24"); len(peers) != 0 {
+	if peers := otherConfiguredHubPeers([]WGHub{hubA, hubOwnDup}, 1, "100.64.0.0/24", map[int64]bool{6: true}); len(peers) != 0 {
 		t.Fatalf("hub colliding with own /24 should be skipped, got %+v", peers)
 	}
 }
@@ -177,7 +200,7 @@ func TestFabricPeersCarryAdvertisedSubnetsNotDefault(t *testing.T) {
 	hubA := hub(1, "west", "100.64.0.0/24", "west.example.com:51820", "PKa", "100.64.0.1")
 	hubB := hubWithRoutes(2, "east", "100.64.1.0/24", "east.example.com:51820", "PKb", "100.64.1.1",
 		"172.16.5.0/24", "0.0.0.0/0")
-	peers := otherConfiguredHubPeers([]WGHub{hubA, hubB}, 1, "100.64.0.0/24")
+	peers := otherConfiguredHubPeers([]WGHub{hubA, hubB}, 1, "100.64.0.0/24", map[int64]bool{2: true})
 	if len(peers) != 1 {
 		t.Fatalf("want 1 fabric peer, got %d", len(peers))
 	}

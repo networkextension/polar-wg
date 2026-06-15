@@ -246,6 +246,104 @@ func (p *Plugin) deleteWGHub(id int64) error {
 	return nil
 }
 
+// ---- wg_hub_links: operator-published cross-hub interconnects ----
+//
+// A row is an undirected, published link between two hubs (stored normalized
+// with hub_a_id < hub_b_id). Only linked hub pairs cross-advertise their /24s;
+// absence of a link means no cross-hub routing. This makes route distribution
+// an explicit operator action ("publish") rather than automatic full-mesh.
+
+// WGHubLink is one published interconnect (with both hubs' slugs for the UI).
+type WGHubLink struct {
+	ID        int64     `json:"id"`
+	HubAID    int64     `json:"hub_a_id"`
+	HubBID    int64     `json:"hub_b_id"`
+	HubASlug  string    `json:"hub_a_slug,omitempty"`
+	HubBSlug  string    `json:"hub_b_slug,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func normHubPair(a, b int64) (int64, int64) {
+	if a > b {
+		return b, a
+	}
+	return a, b
+}
+
+// hubLinkSet returns the set of hub IDs linked to hubID (published links only).
+func (p *Plugin) hubLinkSet(hubID int64) (map[int64]bool, error) {
+	out := map[int64]bool{}
+	rows, err := p.DB.Query(
+		`SELECT hub_a_id, hub_b_id FROM wg_hub_links WHERE hub_a_id = $1 OR hub_b_id = $1`, hubID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a, b int64
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, err
+		}
+		if a == hubID {
+			out[b] = true
+		} else {
+			out[a] = true
+		}
+	}
+	return out, rows.Err()
+}
+
+func (p *Plugin) listWGHubLinks() ([]WGHubLink, error) {
+	rows, err := p.DB.Query(`
+		SELECT l.id, l.hub_a_id, l.hub_b_id, a.slug, b.slug, l.created_at
+		  FROM wg_hub_links l
+		  JOIN wg_hubs a ON a.id = l.hub_a_id
+		  JOIN wg_hubs b ON b.id = l.hub_b_id
+		 ORDER BY l.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]WGHubLink, 0)
+	for rows.Next() {
+		var l WGHubLink
+		if err := rows.Scan(&l.ID, &l.HubAID, &l.HubBID, &l.HubASlug, &l.HubBSlug, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// createWGHubLink publishes a link between two distinct hubs (idempotent).
+func (p *Plugin) createWGHubLink(a, b int64) (*WGHubLink, error) {
+	if a == b {
+		return nil, fmt.Errorf("cannot link a hub to itself")
+	}
+	a, b = normHubPair(a, b)
+	var l WGHubLink
+	err := p.DB.QueryRow(`
+		INSERT INTO wg_hub_links (hub_a_id, hub_b_id) VALUES ($1, $2)
+		ON CONFLICT (hub_a_id, hub_b_id) DO UPDATE SET hub_a_id = EXCLUDED.hub_a_id
+		RETURNING id, hub_a_id, hub_b_id, created_at`, a, b,
+	).Scan(&l.ID, &l.HubAID, &l.HubBID, &l.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+func (p *Plugin) deleteWGHubLink(id int64) error {
+	res, err := p.DB.Exec(`DELETE FROM wg_hub_links WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // suggestFreeMeshCIDR returns the lowest unused /24 from RFC 6598
 // CGNAT (100.64.0.0/10), iterating 100.64.0.0/24 → 100.64.1.0/24 →
 // … → 100.127.255.0/24. CGNAT is reserved for carrier-grade NAT,
