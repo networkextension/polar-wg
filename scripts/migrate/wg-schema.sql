@@ -131,6 +131,19 @@ CREATE INDEX IF NOT EXISTS ix_wg_devices_host_id ON wg_devices(host_id) WHERE ho
 ALTER TABLE wg_hubs    ADD COLUMN IF NOT EXISTS advertised_routes_json JSONB;
 ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS egress_hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE SET NULL;
 
+-- Operator-published cross-hub interconnects (added 2026-06-16). A row is an
+-- undirected link between two hubs (normalized hub_a_id < hub_b_id). Cross-hub
+-- /24 routes are distributed ONLY between linked pairs — no auto full-mesh.
+-- Publishing a route = inserting a row; unpublishing = deleting it.
+CREATE TABLE IF NOT EXISTS wg_hub_links (
+    id         BIGSERIAL PRIMARY KEY,
+    hub_a_id   BIGINT NOT NULL REFERENCES wg_hubs(id) ON DELETE CASCADE,
+    hub_b_id   BIGINT NOT NULL REFERENCES wg_hubs(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT wg_hub_links_ordered CHECK (hub_a_id < hub_b_id),
+    UNIQUE (hub_a_id, hub_b_id)
+);
+
 CREATE TABLE IF NOT EXISTS wg_bundles (
     id BIGSERIAL PRIMARY KEY,
     version TEXT NOT NULL,

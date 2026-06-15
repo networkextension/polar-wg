@@ -241,6 +241,12 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 	if err != nil {
 		return nil, fmt.Errorf("list hubs: %w", err)
 	}
+	// Cross-hub routes are operator-published, not auto-meshed: only hubs the
+	// operator has explicitly linked to this hub get their /24 distributed.
+	linkedHubIDs, err := p.hubLinkSet(hub.ID)
+	if err != nil {
+		return nil, fmt.Errorf("hub links: %w", err)
+	}
 	if hub.Configured() && !isHubSelf {
 		// Spoke: one hub peer. AllowedIPs = own hub's /24 + every OTHER
 		// hub's /24 — cross-hub traffic routes via the own hub, which
@@ -257,7 +263,7 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		if err != nil {
 			return nil, fmt.Errorf("host hub lookup: %w", err)
 		}
-		allowedExtra = append(allowedExtra, crossHubAllowedExtra(allHubs, hub.ID, hub.MeshCIDR, skipHubIDs)...)
+		allowedExtra = append(allowedExtra, crossHubAllowedExtra(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs, skipHubIDs)...)
 		// P2 egress opt-in: the egress hub's advertised routes ride the
 		// own-hub peer too (cross-hub traffic transits the fabric).
 		allowedExtra = append(allowedExtra, egressAllowedExtra(dev.EgressHubID, hub, allHubs)...)
@@ -273,7 +279,7 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		// (full mesh among public-IP hubs). This puts the fabric into the
 		// hub's INITIAL conf at install time — the install script's
 		// renderer already handles endpoint + allowed_extra.
-		for _, e := range otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR) {
+		for _, e := range otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs) {
 			peerOut = append(peerOut, wgPeerResponse{
 				Pubkey:       e.Pubkey,
 				WGIP:         strings.TrimSuffix(e.WGIP, "/32"),
@@ -355,17 +361,18 @@ func otherConfiguredHubs(allHubs []WGHub, ownHubID int64, ownCIDR string) []WGHu
 	return out
 }
 
-// crossHubAllowedExtra widens a spoke's own-hub peer with every OTHER hub's
-// /24 so cross-hub traffic routes via the own hub into the fabric. skipHubIDs
-// drops any hub whose mesh the spoke's HOST is already a DIRECT member of
-// (a dual-homed box with its own wg interface into that mesh) — otherwise both
-// interfaces would claim the same /24 route and the second `wg-quick up` aborts
-// with "File exists". Pass nil to keep every cross-hub /24.
-func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string, skipHubIDs map[int64]bool) []string {
+// crossHubAllowedExtra widens a spoke's own-hub peer with another hub's /24 so
+// cross-hub traffic routes via the own hub into the fabric. Routes are NOT
+// auto-distributed: a hub's /24 is handed out only when the operator has
+// PUBLISHED a link between the two hubs (linkedHubIDs = hubs linked to ownHub).
+// skipHubIDs additionally drops any hub whose mesh the spoke's HOST already
+// joins directly (a dual-homed box), which would otherwise collide on the same
+// /24 route. linkedHubIDs nil/empty → no cross-hub routes at all.
+func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string, linkedHubIDs, skipHubIDs map[int64]bool) []string {
 	hubs := otherConfiguredHubs(allHubs, ownHubID, ownCIDR)
 	out := make([]string, 0, len(hubs))
 	for _, h := range hubs {
-		if skipHubIDs[h.ID] {
+		if !linkedHubIDs[h.ID] || skipHubIDs[h.ID] {
 			continue
 		}
 		out = append(out, hubMeshNetwork(h.MeshCIDR))
@@ -373,10 +380,16 @@ func crossHubAllowedExtra(allHubs []WGHub, ownHubID int64, ownCIDR string, skipH
 	return out
 }
 
-func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64, ownCIDR string) []wgHubPeerEntry {
+// otherConfiguredHubPeers gives a HUB the other hubs as direct fabric peers —
+// but only those the operator has PUBLISHED a link to (linkedHubIDs). Empty
+// set → no fabric peers (the hub stays standalone until links are published).
+func otherConfiguredHubPeers(allHubs []WGHub, ownHubID int64, ownCIDR string, linkedHubIDs map[int64]bool) []wgHubPeerEntry {
 	hubs := otherConfiguredHubs(allHubs, ownHubID, ownCIDR)
 	out := make([]wgHubPeerEntry, 0, len(hubs))
 	for _, h := range hubs {
+		if !linkedHubIDs[h.ID] {
+			continue
+		}
 		wgip := h.WGIP
 		if wgip != "" && !strings.Contains(wgip, "/") {
 			wgip += "/32"
@@ -563,7 +576,12 @@ func (p *Plugin) handleWGHubPeers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	peers = append(peers, otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR)...)
+	linkedHubIDs, err := p.hubLinkSet(hub.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	peers = append(peers, otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs)...)
 	for _, h := range allHubs {
 		if h.ID != hub.ID && h.UpdatedAt.After(revTS) {
 			revTS = h.UpdatedAt
@@ -827,6 +845,47 @@ func (p *Plugin) handleAdminWGHubResetBind(c *gin.Context) {
 	}
 	if err := p.clearWGHubBind(id, time.Now().UTC()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ---- cross-hub route publishing (wg_hub_links) ----
+
+func (p *Plugin) handleAdminWGHubLinkList(c *gin.Context) {
+	links, err := p.listWGHubLinks()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"links": links})
+}
+
+func (p *Plugin) handleAdminWGHubLinkCreate(c *gin.Context) {
+	var req struct {
+		HubAID int64 `json:"hub_a_id"`
+		HubBID int64 `json:"hub_b_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.HubAID <= 0 || req.HubBID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "hub_a_id and hub_b_id required"})
+		return
+	}
+	link, err := p.createWGHubLink(req.HubAID, req.HubBID)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"link": link})
+}
+
+func (p *Plugin) handleAdminWGHubLinkDelete(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_id"})
+		return
+	}
+	if err := p.deleteWGHubLink(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
