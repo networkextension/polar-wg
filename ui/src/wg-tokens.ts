@@ -391,7 +391,9 @@ function renderTopology(rows: WGHubStatusRow[]): string {
       const name = (p.public_key && pubkeyToName.get(p.public_key)) || truncPubkey(p.public_key);
       const hostID = p.public_key ? pubkeyToHostID.get(p.public_key) : undefined;
       const hs = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
-      const tip = `${name}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
+      // WG IP = the peer's allowed-ips /32 (first CIDR). Shown on hover.
+      const wgip = (p.allowed_ips || "").split(",")[0].split("/")[0].trim();
+      const tip = `${name}\nwg ${wgip || "—"}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
       spokes.push(
         `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}"/>`,
       );
