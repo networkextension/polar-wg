@@ -144,6 +144,9 @@ function truncPubkey(k?: string): string {
 // that hasn't been listed yet).
 const pubkeyToName = new Map<string, string>();
 const pubkeyToHostID = new Map<string, string>();
+// device's assigned mesh IP (present even before first handshake, unlike the
+// live wgctl allowed_ips which is empty until the peer connects).
+const pubkeyToWGIP = new Map<string, string>();
 
 // Cross-link to the polar-hosts module's detail page. Derives the hosts host
 // from the current origin (wg.<env> → hosts.<env>) so it works in prod + dev,
@@ -159,6 +162,7 @@ async function primePubkeyMap(): Promise<void> {
     for (const d of data.devices ?? []) {
       if (d.pubkey && d.hostname) pubkeyToName.set(d.pubkey, d.hostname);
       if (d.pubkey && d.host_id) pubkeyToHostID.set(d.pubkey, d.host_id);
+      if (d.pubkey && d.device_ip) pubkeyToWGIP.set(d.pubkey, d.device_ip);
     }
     // Re-render status if it's already mounted, now that names exist.
     if (!byId<HTMLElement>("paneStatus")?.hidden) void refreshStatus();
@@ -395,7 +399,12 @@ function renderTopology(rows: WGHubStatusRow[]): string {
       const name = (p.public_key && pubkeyToName.get(p.public_key)) || truncPubkey(p.public_key);
       const hostID = p.public_key ? pubkeyToHostID.get(p.public_key) : undefined;
       const hs = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
-      const tip = `${name}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
+      // WG IP shown on hover: prefer the device's assigned mesh IP (set at
+      // register, survives "never handshaked"); fall back to the live
+      // allowed-ips /32 if the peer isn't in the devices list.
+      const wgip = ((p.public_key && pubkeyToWGIP.get(p.public_key)) || p.allowed_ips || "")
+        .split(",")[0].split("/")[0].trim();
+      const tip = `${name}\nwg ${wgip || "—"}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
       spokes.push(
         `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}"/>`,
       );
