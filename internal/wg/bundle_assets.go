@@ -72,6 +72,22 @@ func (p *Plugin) ensureEgressColumns() error {
 	return nil
 }
 
+// ensureHubLinksTable creates wg_hub_links (operator-published cross-hub
+// interconnects) if missing. Idempotent. Cross-hub /24 routes are distributed
+// only between linked pairs; no row = no cross-hub routing.
+func (p *Plugin) ensureHubLinksTable() error {
+	stmt := `CREATE TABLE IF NOT EXISTS wg_hub_links (
+		id         BIGSERIAL PRIMARY KEY,
+		hub_a_id   BIGINT NOT NULL REFERENCES wg_hubs(id) ON DELETE CASCADE,
+		hub_b_id   BIGINT NOT NULL REFERENCES wg_hubs(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		CONSTRAINT wg_hub_links_ordered CHECK (hub_a_id < hub_b_id),
+		UNIQUE (hub_a_id, hub_b_id)
+	)`
+	_, err := p.DB.Exec(stmt)
+	return err
+}
+
 // normWGOS canonicalizes an OS string. "" stays "" (caller defaults to darwin).
 func normWGOS(s string) string {
 	t := strings.ToLower(strings.TrimSpace(s))

@@ -131,6 +131,10 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 	if err := p.ensureEgressColumns(); err != nil {
 		log.Printf("wg: ensure egress columns: %v", err)
 	}
+	// Operator-published cross-hub links (wg_hub_links).
+	if err := p.ensureHubLinksTable(); err != nil {
+		log.Printf("wg: ensure hub_links table: %v", err)
+	}
 	return p, nil
 }
 
