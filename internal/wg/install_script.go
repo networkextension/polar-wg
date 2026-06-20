@@ -43,16 +43,28 @@ TARGET_ARCH='{{.Arch}}'
 TOKEN=""
 HOSTNAME_OVERRIDE=""
 SITE_SLUG=""
+HOST_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --token=*)    TOKEN="${1#*=}";;
     --hostname=*) HOSTNAME_OVERRIDE="${1#*=}";;
     --site=*)     SITE_SLUG="${1#*=}";;
+    --host-id=*)  HOST_ID="${1#*=}";;
     *) echo "unknown arg: $1" >&2; exit 1;;
   esac
   shift
 done
 [[ -n "$TOKEN" ]] || { echo "--token=<TOKEN> required"; exit 1; }
+
+# host_id ties this wg device to its polar-hosts host row (wg<->hosts cross-link
+# stamped at register). Auto-read from the local polar-agent config if not given.
+if [[ -z "$HOST_ID" ]]; then
+  for cfg in "$HOME/.polar/agent.toml" /var/root/.polar/agent.toml /Users/*/.polar/agent.toml /root/.polar/agent.toml; do
+    [[ -r "$cfg" ]] || continue
+    HOST_ID=$(sed -n 's/^[[:space:]]*host_id[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$cfg" | head -1)
+    [[ -n "$HOST_ID" ]] && break
+  done
+fi
 
 # --- 0. resolve target os/arch (baked target wins, else detect locally) ---
 OS="${TARGET_OS:-$(uname -s | tr 'A-Z' 'a-z')}"
@@ -125,10 +137,10 @@ echo "==> registering with control plane"
 # Export BEFORE the python heredoc so the child process inherits the
 # env. (Originally placed below; python ran first and KeyError'd on
 # 'TOKEN'.)
-export TOKEN PUB HOSTNAME_REPORT OS_RAW ARCH AGENT_VER LAN_JSON WG_LISTEN SITE_SLUG SERVER MESH_CIDR PRIV
+export TOKEN PUB HOSTNAME_REPORT OS_RAW ARCH AGENT_VER LAN_JSON WG_LISTEN SITE_SLUG SERVER MESH_CIDR PRIV HOST_ID
 REGISTER_BODY=$(python3 - <<PYREG
 import json, os
-print(json.dumps({
+body = {
   "token":     os.environ["TOKEN"],
   "pubkey":    os.environ["PUB"],
   "hostname":  os.environ["HOSTNAME_REPORT"],
@@ -138,7 +150,11 @@ print(json.dumps({
   "lan_addrs": json.loads(os.environ["LAN_JSON"]) if os.environ.get("LAN_JSON") else [],
   "wg_listen": int(os.environ["WG_LISTEN"]),
   "site_slug": os.environ.get("SITE_SLUG", ""),
-}))
+}
+hid = os.environ.get("HOST_ID", "").strip()
+if hid:
+  body["host_id"] = hid  # cross-link to polar-hosts; server stamps wg_devices.host_id
+print(json.dumps(body))
 PYREG
 )
 RESP=$(curl -fsSL -X POST "$SERVER/v1/register" \
