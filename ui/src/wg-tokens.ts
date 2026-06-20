@@ -32,6 +32,7 @@ import { byId } from "@networkextension/polar-ui-common/lib/dom";
 import { hydrateSiteBrand, hydrateSidebarFoot } from "@networkextension/polar-ui-common/lib/site";
 import { mountPlatformNav } from "@networkextension/polar-ui-common/lib/sidebar";
 import { bindThemeSync, initStoredTheme } from "@networkextension/polar-ui-common/lib/theme";
+import { NEON, freshnessColor, nocGlowDefs, nocPanel } from "@networkextension/polar-ui-common/lib/neon-topo";
 import type {
   WGBundle,
   WGDevice,
@@ -322,11 +323,9 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
 
 // ---- Star topology (SVG) ----
 
+// Neon handshake-age ramp, shared with the hosts panel via polar-ui-common.
 function handshakeColor(ageSec?: number): string {
-  if (ageSec === undefined || ageSec === null) return "#9aa0a6"; // never
-  if (ageSec < 60) return "#2a8a2a"; // fresh
-  if (ageSec < 300) return "#b58900"; // warn
-  return "#c0392b"; // stale
+  return freshnessColor(ageSec);
 }
 
 type Pt = { x: number; y: number };
@@ -380,7 +379,7 @@ function renderTopology(rows: WGHubStatusRow[]): string {
       const op = hubPos.get(other.id);
       if (!op) return;
       hubLinks.push(
-        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${op.x.toFixed(1)}" y2="${op.y.toFixed(1)}" class="topo-hublink" stroke="${handshakeColor(p.handshake_age_sec)}"><title>${esc(r.slug)} ↔ ${esc(other.slug)}</title></line>`,
+        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${op.x.toFixed(1)}" y2="${op.y.toFixed(1)}" class="topo-hublink" stroke="${handshakeColor(p.handshake_age_sec)}" filter="url(#topo-glow)"><title>${esc(r.slug)} ↔ ${esc(other.slug)}</title></line>`,
       );
     });
 
@@ -406,18 +405,18 @@ function renderTopology(rows: WGHubStatusRow[]): string {
         .split(",")[0].split("/")[0].trim();
       const tip = `${name}\nwg ${wgip || "—"}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
       spokes.push(
-        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}"/>`,
+        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}" filter="url(#topo-glow)"/>`,
       );
       const lx = dp.x + Math.cos(a) * 10;
       const ly = dp.y + Math.sin(a) * 10 + 3;
       const anchor = Math.cos(a) < -0.25 ? "end" : Math.cos(a) > 0.25 ? "start" : "middle";
-      const node = `<g class="topo-dev"><circle cx="${dp.x.toFixed(1)}" cy="${dp.y.toFixed(1)}" r="6" fill="${col}"><title>${esc(tip)}</title></circle><text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="topo-dev-label">${esc(name)}</text></g>`;
+      const node = `<g class="topo-dev"><circle cx="${dp.x.toFixed(1)}" cy="${dp.y.toFixed(1)}" r="6" fill="${col}" filter="url(#topo-glow)"><title>${esc(tip)}</title></circle><text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="topo-dev-label">${esc(name)}</text></g>`;
       devNodes.push(hostID ? `<a href="${hostsLinkURL(hostID)}" target="_top">${node}</a>` : node);
     });
 
     // hub node on top
     const peerCount = r.status?.peer_count ?? peers.length;
-    const fill = !r.status ? "#9aa0a6" : r.status.stale ? "#c0392b" : "#3a6df0";
+    const fill = !r.status ? NEON.slate : r.status.stale ? NEON.red : NEON.blue;
     const egress = r.advertised_routes ?? [];
     const egressTip = egress.length
       ? `\n出口: ${egress.map((rt) => (rt === "0.0.0.0/0" ? "0.0.0.0/0 (全隧道)" : rt)).join(", ")}`
@@ -432,11 +431,15 @@ function renderTopology(rows: WGHubStatusRow[]): string {
       ? `<text x="${(hp.x + 18).toFixed(1)}" y="${(hp.y - 16).toFixed(1)}" class="topo-egress">🌍<title>${esc("出口路由:\n" + egress.join("\n"))}</title></text>`
       : "";
     hubNodes.push(
-      `<g class="topo-hub"><circle cx="${hp.x.toFixed(1)}" cy="${hp.y.toFixed(1)}" r="22" fill="${fill}"><title>${esc(htip)}</title></circle><text x="${hp.x.toFixed(1)}" y="${(hp.y + 5).toFixed(1)}" text-anchor="middle" class="topo-hub-count">${peerCount}</text><text x="${hp.x.toFixed(1)}" y="${(hp.y + 40).toFixed(1)}" text-anchor="middle" class="topo-hub-label">${esc(r.label || r.slug)}</text>${cidrLine}${egressBadge}</g>`,
+      `<g class="topo-hub"><circle cx="${hp.x.toFixed(1)}" cy="${hp.y.toFixed(1)}" r="22" fill="${fill}" filter="url(#topo-glow)"><title>${esc(htip)}</title></circle><text x="${hp.x.toFixed(1)}" y="${(hp.y + 5).toFixed(1)}" text-anchor="middle" class="topo-hub-count">${peerCount}</text><text x="${hp.x.toFixed(1)}" y="${(hp.y + 40).toFixed(1)}" text-anchor="middle" class="topo-hub-label">${esc(r.label || r.slug)}</text>${cidrLine}${egressBadge}</g>`,
     );
   });
 
-  return `<svg viewBox="0 0 ${W} ${H}" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="WG mesh topology">${hubLinks.join("")}${spokes.join("")}${devNodes.join("")}${hubNodes.join("")}</svg>`;
+  // Dark-NOC chrome (shared with the hosts panel): deep blue→black panel +
+  // neon glow filter. Layer order: hub links, device spokes, device nodes,
+  // hub nodes on top.
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="WG mesh topology">${nocGlowDefs("topo-glow")}${hubLinks.join("")}${spokes.join("")}${devNodes.join("")}${hubNodes.join("")}</svg>`;
+  return nocPanel({ svg });
 }
 
 function applyStatusView(): void {
