@@ -131,6 +131,11 @@ CREATE INDEX IF NOT EXISTS ix_wg_devices_host_id ON wg_devices(host_id) WHERE ho
 ALTER TABLE wg_hubs    ADD COLUMN IF NOT EXISTS advertised_routes_json JSONB;
 ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS egress_hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE SET NULL;
 
+-- DNS/HTTP-proxy push (added 2026-06-21, doc/wg-dns-proxy-push-design.md):
+-- per-hub operator policy (dns servers + match/search domains; proxy in v2)
+-- distributed via /v1/peers & register responses.
+ALTER TABLE wg_hubs    ADD COLUMN IF NOT EXISTS policy_json JSONB;
+
 -- Operator-published cross-hub interconnects (added 2026-06-16). A row is an
 -- undirected link between two hubs (normalized hub_a_id < hub_b_id). Cross-hub
 -- /24 routes are distributed ONLY between linked pairs — no auto full-mesh.

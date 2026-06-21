@@ -19,7 +19,9 @@ package wg
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -87,8 +89,11 @@ type wgRegisterResponse struct {
 	Peers        []wgPeerResponse `json:"peers"`
 	KeepaliveSec int              `json:"keepalive_sec"`
 	RefreshSec   int              `json:"refresh_sec"`
-	Token        string           `json:"token,omitempty"`
-	TokenExpires *time.Time       `json:"token_expires,omitempty"`
+	// Policy — DNS/proxy settings the device applies to its tunnel network
+	// settings (mobile). Per-hub. See doc/wg-dns-proxy-push-design.md.
+	Policy       *WGPolicy  `json:"policy,omitempty"`
+	Token        string     `json:"token,omitempty"`
+	TokenExpires *time.Time `json:"token_expires,omitempty"`
 }
 
 func (p *Plugin) handleWGRegister(c *gin.Context) {
@@ -290,11 +295,11 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		}
 	}
 	return &wgRegisterResponse{
-		DeviceID:     dev.DeviceID,
-		DeviceIP:     dev.DeviceIP,
-		SiteSlug:     dev.SiteSlug,
-		HubSlug:      hub.Slug,
-		MeshCIDR:     hub.MeshCIDR,
+		DeviceID: dev.DeviceID,
+		DeviceIP: dev.DeviceIP,
+		SiteSlug: dev.SiteSlug,
+		HubSlug:  hub.Slug,
+		MeshCIDR: hub.MeshCIDR,
 		Hub: wgHubResponse{
 			Slug:     hub.Slug,
 			Pubkey:   hub.Pubkey,
@@ -304,6 +309,7 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		Peers:        peerOut,
 		KeepaliveSec: hub.KeepaliveSec,
 		RefreshSec:   hub.RefreshSec,
+		Policy:       hub.Policy,
 		TokenExpires: dev.TokenExpiresAt,
 	}, nil
 }
@@ -486,6 +492,44 @@ func validateAdvertisedRoutes(routes []string, allHubs []WGHub) error {
 			}
 			if cidrOverlaps(n, m) {
 				return fmt.Errorf("route %q overlaps hub %q mesh_cidr %s", r, h.Slug, h.MeshCIDR)
+			}
+		}
+	}
+	return nil
+}
+
+// validateWGPolicy checks operator DNS/proxy push input (light). DNS servers
+// must parse as IPs; doh mode needs a doh_url; proxy host:port must split and
+// pac_url must parse. v1 populates only DNS; proxy fields validate for v2.
+func validateWGPolicy(pol *WGPolicy) error {
+	if pol == nil {
+		return nil
+	}
+	if d := pol.DNS; d != nil {
+		for _, s := range d.Servers {
+			if net.ParseIP(strings.TrimSpace(s)) == nil {
+				return fmt.Errorf("invalid DNS server %q", s)
+			}
+		}
+		if d.Mode != "" && d.Mode != "plain" && d.Mode != "doh" {
+			return fmt.Errorf("dns mode must be 'plain' or 'doh'")
+		}
+		if d.Mode == "doh" && strings.TrimSpace(d.DoHURL) == "" {
+			return fmt.Errorf("doh mode requires doh_url")
+		}
+	}
+	if px := pol.Proxy; px != nil {
+		for _, hp := range []string{px.HTTP, px.HTTPS} {
+			if hp == "" {
+				continue
+			}
+			if _, _, err := net.SplitHostPort(hp); err != nil {
+				return fmt.Errorf("invalid proxy host:port %q: %v", hp, err)
+			}
+		}
+		if px.PACURL != "" {
+			if _, err := url.Parse(px.PACURL); err != nil {
+				return fmt.Errorf("invalid pac_url %q: %v", px.PACURL, err)
 			}
 		}
 	}
@@ -776,6 +820,8 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 		RefreshSec   int    `json:"refresh_sec"`
 		// P2 egress: nil = leave unchanged; [] = clear; non-empty = replace.
 		AdvertisedRoutes *[]string `json:"advertised_routes"`
+		// DNS/proxy push: nil = leave unchanged; object = replace.
+		Policy *WGPolicy `json:"policy"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_input"})
@@ -812,6 +858,13 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 			return
 		}
 		existing.AdvertisedRoutes = *req.AdvertisedRoutes
+	}
+	if req.Policy != nil {
+		if err := validateWGPolicy(req.Policy); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		existing.Policy = req.Policy
 	}
 	out, err := p.updateWGHub(existing, time.Now().UTC())
 	if err != nil {
