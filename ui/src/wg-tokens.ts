@@ -39,8 +39,18 @@ import {
   nocPanel,
   nocSpoke,
   nocSvg,
-  ringPositions,
 } from "@networkextension/polar-ui-common/lib/neon-topo";
+
+// Even points on an ellipse — wide rings for 16:9/16:10 screens so all nodes
+// fit horizontally without vertical scroll. startDeg from top, clockwise.
+function ellipseLayout(n: number, cx: number, cy: number, rx: number, ry: number, startDeg = -90): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const ang = ((startDeg + (360 * i) / Math.max(1, n)) * Math.PI) / 180;
+    out.push({ x: cx + Math.cos(ang) * rx, y: cy + Math.sin(ang) * ry });
+  }
+  return out;
+}
 import type {
   WGBundle,
   WGDevice,
@@ -427,17 +437,19 @@ function renderTopology(rows: WGHubStatusRow[]): string {
     }),
   );
 
-  const W = 960;
+  // 16:9 wide canvas + elliptical rings so all nodes fit horizontally without
+  // vertical scroll on a 16:9 / 16:10 screen.
+  const W = 1280;
+  const H = 720;
   const cx = W / 2;
-  const perRing = 10;
-  const devRings = Math.max(1, Math.ceil(devices.length / perRing));
-  const H = Math.max(560, 240 + (1 + devRings) * 150);
   const cy = H / 2;
+  const perRing = 14;
+  const devRings = Math.max(1, Math.ceil(devices.length / perRing));
   const spokes: string[] = [];
   const nodes: string[] = [];
 
-  const place = (list: TopoNode[], radius: number, startDeg: number): void => {
-    const pts = ringPositions(list.length, cx, cy, radius, startDeg);
+  const place = (list: TopoNode[], rx: number, ry: number, startDeg: number): void => {
+    const pts = ellipseLayout(list.length, cx, cy, rx, ry, startDeg);
     list.forEach((n, i) => {
       const { x, y } = pts[i];
       spokes.push(
@@ -460,9 +472,11 @@ function renderTopology(rows: WGHubStatusRow[]): string {
     });
   };
 
-  place(hubs, 130, -90);
+  place(hubs, 210, 120, -90);
   for (let r = 0; r < devRings; r++) {
-    place(devices.slice(r * perRing, r * perRing + perRing), 130 + (r + 1) * 140, -90 + (r + 1) * 18);
+    const rx = 470 + r * 250;
+    const ry = Math.min(rx * 0.5, cy - 80);
+    place(devices.slice(r * perRing, r * perRing + perRing), rx, ry, -90 + (r + 1) * 14);
   }
 
   const center =
