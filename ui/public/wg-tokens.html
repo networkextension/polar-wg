@@ -7,6 +7,47 @@
     <link rel="icon" type="image/svg+xml" href="/assets/polaris-logo.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="stylesheet" href="/styles.css" />
+    <style>
+      /* page-local overrides (loaded after /styles.css; only this page) — fixes
+         the dark-NOC shared modal/focus rendering without touching polar-ui-common. */
+      /* --- real centered modal (shared .lp-modal rendered in-flow under dark-NOC) --- */
+      body .lp-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.45);
+        align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow: auto; }
+      body .lp-modal:not([hidden]) { display: flex; }
+      .lp-modal[hidden] { display: none !important; }
+      body .lp-modal-card { background: var(--surface, #fff); color: var(--text, #111);
+        border-radius: 12px; width: 100%; max-height: 88vh; display: flex; flex-direction: column;
+        box-shadow: 0 14px 44px rgba(0,0,0,0.40); overflow: hidden; }
+      body .lp-modal-head { display: flex; align-items: center; justify-content: space-between;
+        gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--border, #e5e5e5); background: transparent; }
+      body .lp-modal-title { font-weight: 600; font-size: 15px; }
+      body .lp-modal-close { border: none; background: transparent; font-size: 18px; line-height: 1;
+        cursor: pointer; color: var(--text-muted, #888); padding: 4px 8px; border-radius: 6px; }
+      body .lp-modal-close:hover { background: rgba(127,127,127,0.16); color: var(--text,#222); }
+      body .lp-modal-body { padding: 14px 16px; overflow: auto; flex: 1; }
+      body .lp-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;
+        border-top: 1px solid var(--border, #e5e5e5); background: transparent; }
+      /* flatten the heavy per-field cards inside modals → compact vertical form */
+      .lp-modal-body .settings-section-card { border: none !important; background: transparent !important;
+        padding: 0 !important; margin: 0 0 16px 0 !important; }
+      .lp-modal-body .settings-section-title { display: block; margin-bottom: 4px; font-weight: 600; }
+      .lp-modal-body .meta-subtitle { color: #6b7280; font-size: 12px; }
+      /* focus = blue (was orange/accent, confusingly close to danger) */
+      body .input:focus, body .input:focus-visible, body .lp-input:focus,
+      body select:focus, body textarea:focus {
+        outline: 2px solid #3b82f6 !important; outline-offset: 1px; border-color: #3b82f6 !important; }
+      /* active tab gets a clear underline (HTML uses .lp-tab-active; shared CSS only styles .active) */
+      .lp-tab-active { color: var(--accent, #3b82f6) !important;
+        border-bottom: 2px solid var(--accent, #3b82f6) !important; }
+      /* token table density + helpers */
+      #tokensTable td, #tokensTable th { padding: 6px 8px; vertical-align: middle; }
+      .wg-role { white-space: nowrap; }
+      .wg-copy { cursor: pointer; border: none; background: transparent; color: var(--text-muted,#888);
+        font-size: 12px; padding: 0 3px; } .wg-copy:hover { color: var(--text,#222); }
+      .wg-warn { background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; border-radius: 8px;
+        padding: 8px 10px; font-size: 13px; font-weight: 600; margin: 0 0 12px 0; }
+      @media (prefers-color-scheme: dark) { .wg-warn { background: #3a2410; border-color: #b45309; color: #fdba74; } }
+    </style>
   </head>
   <body class="lp-page">
     <div class="lp-app">
@@ -174,6 +215,9 @@
                 <span class="badge">入网 Token</span>
                 <span id="tokensSummary" class="lp-mode-badge">—</span>
                 <span style="flex:1;"></span>
+                <label class="meta-subtitle" style="display:inline-flex; gap:4px; align-items:center;">
+                  <input id="hideRevokedCheck" type="checkbox" checked /> 隐藏已撤销
+                </label>
                 <button id="tokensRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
                 <button id="newTokenBtn" class="btn-inline btn-primary" type="button">+ 新建 Token</button>
               </div>
@@ -264,7 +308,7 @@
               <input type="radio" name="tokenRole" value="device" checked /> 普通设备 (device)
             </label>
             <label style="display:inline-flex; gap:4px; align-items:center;">
-              <input type="radio" name="tokenRole" value="hub" /> Hub (老大哥)
+              <input type="radio" name="tokenRole" value="hub" /> Hub（中转节点）
             </label>
             <div class="meta-subtitle" style="margin-top:4px;">Hub 是 mesh 的中转节点，处理跨 LAN 转发。每个 mesh 至少需要一个 hub。</div>
           </div>
@@ -326,10 +370,7 @@
           <span class="lp-modal-title">✓ Token 已创建</span>
         </div>
         <div class="lp-modal-body">
-          <p class="meta-subtitle" style="margin: 0 0 12px 0;">
-            <strong style="color: var(--danger, #c00);">这是 plaintext，只显示一次。</strong>
-            关闭后无法找回。
-          </p>
+          <div class="wg-warn">⚠️ 这是 plaintext，只显示一次，关闭后无法找回 —— 请立刻复制保存。</div>
           <div class="settings-section-card" style="margin-bottom: 8px;">
             <div class="settings-section-title">Bearer Token</div>
             <div style="display:flex; gap:6px; margin-top:4px;">
