@@ -812,20 +812,33 @@ function hubLabelByID(id?: number): string {
 // For device tokens, just the slug.
 function hubCellForToken(tok: WGToken): string {
   const slug = hubLabelByID(tok.hub_id);
-  if (tok.role !== "hub") return slug;
+  const h = tok.hub_id ? hubsCache.find((x) => x.id === tok.hub_id) : undefined;
+  const tip = [h?.slug, h ? `#${h.id}` : (tok.hub_id ? `#${tok.hub_id}` : ""), (h as { mesh_cidr?: string })?.mesh_cidr]
+    .filter(Boolean).join(" · ");
+  if (tok.role !== "hub") {
+    return `<span title="${escAttr(tip)}">${slug}</span>`;
+  }
   const ep = tok.public_endpoint ? `<br><code style="font-size:11px;">${tok.public_endpoint}</code>` : "";
   const cidr = tok.mesh_cidr_pref ? ` <span class="meta-subtitle">${tok.mesh_cidr_pref}</span>` : "";
-  return `${slug}${ep}${cidr}`;
+  return `<span title="${escAttr(tip)}">${slug}</span>${ep}${cidr}`;
+}
+
+// escAttr escapes a string for safe use inside an HTML attribute value.
+function escAttr(s: string): string {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function renderTokenRow(tok: WGToken): HTMLTableRowElement {
   const tr = document.createElement("tr");
   if (tok.revoked_at) tr.style.opacity = "0.5";
+  const pfx = tok.token_prefix || "";
+  const pfxTail = pfx.length > 8 ? `…${pfx.slice(-8)}` : pfx;
   const cells = [
     tok.label,
-    tok.role === "hub" ? `🌐 hub` : `💻 device`,
+    `<span class="wg-role">${tok.role === "hub" ? "🌐 hub" : "💻 device"}</span>`,
     hubCellForToken(tok),
-    `<code style="font-size:11px;">${tok.token_prefix}…</code>`,
+    `<code style="font-size:11px;" title="${escAttr(pfx)}">${pfxTail}</code>` +
+      `<button class="wg-copy" type="button" data-copy="${escAttr(pfx)}" title="复制前缀">⧉</button>`,
     tok.expires_at ? new Date(tok.expires_at).toISOString().slice(0, 10) : "永久",
     tokenStatusText(tok),
     fmtRelative(tok.created_at),
@@ -834,6 +847,13 @@ function renderTokenRow(tok: WGToken): HTMLTableRowElement {
     const td = document.createElement("td");
     td.innerHTML = html;
     tr.appendChild(td);
+  });
+  tr.querySelectorAll<HTMLButtonElement>("button.wg-copy").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void navigator.clipboard?.writeText(b.dataset.copy || "");
+      const o = b.textContent; b.textContent = "✓"; setTimeout(() => (b.textContent = o), 1200);
+    });
   });
   const cellActions = document.createElement("td");
   if (!tok.revoked_at) {
@@ -859,10 +879,13 @@ function renderTokenRow(tok: WGToken): HTMLTableRowElement {
 async function refreshTokens(): Promise<void> {
   try {
     const { data } = await listWGTokens();
-    const items = data.tokens ?? [];
+    const all = data.tokens ?? [];
+    const hideRevoked = (document.getElementById("hideRevokedCheck") as HTMLInputElement | null)?.checked ?? true;
+    const items = hideRevoked ? all.filter((t) => !t.revoked_at) : all;
     tokensTbody.innerHTML = "";
     items.forEach((tok) => tokensTbody.appendChild(renderTokenRow(tok)));
-    tokensSummary.textContent = `${items.length} 个`;
+    const revokedN = all.length - all.filter((t) => !t.revoked_at).length;
+    tokensSummary.textContent = hideRevoked && revokedN > 0 ? `${items.length} 个（隐藏 ${revokedN} 已撤销）` : `${all.length} 个`;
     tokensTable.hidden = items.length === 0;
     tokensEmpty.hidden = items.length !== 0;
   } catch (err) {
@@ -1042,8 +1065,14 @@ function renderDeviceEgressCell(dev: WGDevice): HTMLTableCellElement {
     sel.appendChild(opt);
   }
   sel.value = dev.egress_hub_id ? String(dev.egress_hub_id) : "";
+  const prevValue = sel.value;
   sel.addEventListener("change", async () => {
     const next = sel.value ? Number(sel.value) : null;
+    const label = next ? sel.options[sel.selectedIndex].textContent : "关闭（不走出口）";
+    if (!window.confirm(`把设备 "${dev.hostname || dev.id}" 的出口路由改为「${label}」？此操作会立即改变该设备的流量走向。`)) {
+      sel.value = prevValue; // revert the dropdown, no API call
+      return;
+    }
     try {
       const { data } = await updateWGDeviceEgress(dev.id, next);
       if (data.error) {
@@ -1122,6 +1151,7 @@ async function refreshDevices(): Promise<void> {
 
 devicesRefreshBtn?.addEventListener("click", () => void refreshDevices());
 includeRemovedCheck?.addEventListener("change", () => void refreshDevices());
+document.getElementById("hideRevokedCheck")?.addEventListener("change", () => void refreshTokens());
 
 // ---- Bundles tab ----
 
