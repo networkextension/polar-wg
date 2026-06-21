@@ -108,8 +108,36 @@ const hubStatusRefreshBtn = byId<HTMLButtonElement>("hubStatusRefreshBtn");
 const hubTopology = byId<HTMLElement>("hubTopology");
 const hubTopologyWrap = byId<HTMLElement>("hubTopologyWrap");
 const hubViewToggle = byId<HTMLButtonElement>("hubViewToggle");
+const hubFsBtn = byId<HTMLButtonElement>("hubFsBtn");
 // Star-topology is the default view; the toggle flips to the legacy card list.
 let topoView = true;
+
+// Fullscreen the topology (NOC big-screen). Safari needs the webkit prefix.
+function wgFsActive(): boolean {
+  const d = document as Document & { webkitFullscreenElement?: Element };
+  return !!(d.fullscreenElement || d.webkitFullscreenElement);
+}
+function wgSyncFs(): void {
+  const on = wgFsActive();
+  if (hubTopologyWrap) {
+    hubTopologyWrap.style.background = on ? "#070a14" : "";
+    hubTopologyWrap.style.padding = on ? "20px" : "";
+    hubTopologyWrap.style.overflow = on ? "auto" : "";
+  }
+  if (hubFsBtn) hubFsBtn.textContent = on ? "⛶ 退出全屏" : "⛶ 全屏";
+}
+hubFsBtn?.addEventListener("click", () => {
+  if (!hubTopologyWrap) return;
+  const el = hubTopologyWrap as HTMLElement & { webkitRequestFullscreen?: () => void };
+  const d = document as Document & { webkitExitFullscreen?: () => void };
+  if (wgFsActive()) {
+    (d.exitFullscreen || d.webkitExitFullscreen)?.call(d);
+  } else {
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+  }
+});
+document.addEventListener("fullscreenchange", wgSyncFs);
+document.addEventListener("webkitfullscreenchange", wgSyncFs);
 
 function esc(s: string): string {
   return s
