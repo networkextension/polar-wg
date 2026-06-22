@@ -37,7 +37,7 @@ func (p *Plugin) ensureBundleAssetColumn() error {
 
 // ensureBundleOSArchColumns adds the os/arch dimension to wg_bundles so
 // per-platform bundles can coexist. Idempotent. Existing (macOS-only) rows
-// default to os='darwin', arch='' (universal). "latest" + version-uniqueness
+// default to os='darwin', arch=” (universal). "latest" + version-uniqueness
 // move from global to per-(os,arch).
 func (p *Plugin) ensureBundleOSArchColumns() error {
 	stmts := []string{
@@ -63,6 +63,9 @@ func (p *Plugin) ensureEgressColumns() error {
 	stmts := []string{
 		`ALTER TABLE wg_hubs ADD COLUMN IF NOT EXISTS advertised_routes_json JSONB`,
 		`ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS egress_hub_id BIGINT REFERENCES wg_hubs(id) ON DELETE SET NULL`,
+		// DNS/HTTP-proxy push (doc/wg-dns-proxy-push-design.md): operator policy
+		// distributed to devices in the /v1/peers response.
+		`ALTER TABLE wg_hubs ADD COLUMN IF NOT EXISTS policy_json JSONB`,
 	}
 	for _, s := range stmts {
 		if _, err := p.DB.Exec(s); err != nil {

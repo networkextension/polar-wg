@@ -25,23 +25,52 @@ import (
 // "bound" when the operator runs install.sh against a role=hub token
 // and that device claims the hub slot (bound_device_id set).
 type WGHub struct {
-	ID            int64     `json:"id"`
-	Slug          string    `json:"slug"`
-	Label         string    `json:"label"`
-	Pubkey        string    `json:"pubkey"`
-	Endpoint      string    `json:"endpoint"`
-	WGIP          string    `json:"wg_ip"`
-	MeshCIDR      string    `json:"mesh_cidr"`
-	KeepaliveSec  int       `json:"keepalive_sec"`
-	RefreshSec    int       `json:"refresh_sec"`
-	BoundDeviceID *int64    `json:"bound_device_id,omitempty"`
+	ID            int64  `json:"id"`
+	Slug          string `json:"slug"`
+	Label         string `json:"label"`
+	Pubkey        string `json:"pubkey"`
+	Endpoint      string `json:"endpoint"`
+	WGIP          string `json:"wg_ip"`
+	MeshCIDR      string `json:"mesh_cidr"`
+	KeepaliveSec  int    `json:"keepalive_sec"`
+	RefreshSec    int    `json:"refresh_sec"`
+	BoundDeviceID *int64 `json:"bound_device_id,omitempty"`
 	// AdvertisedRoutes — operator-declared egress CIDRs this hub gateways
 	// to (e.g. a datacenter LAN "192.168.10.0/24", or "0.0.0.0/0" full
 	// tunnel). Per-spoke opt-in via wg_devices.egress_hub_id — never
 	// auto-distributed. See doc/wg-multi-hub-routing.md 出口 section.
-	AdvertisedRoutes []string  `json:"advertised_routes,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	AdvertisedRoutes []string `json:"advertised_routes,omitempty"`
+	// Policy — operator DNS / HTTP-proxy settings pushed to (mobile) devices,
+	// which apply them to the tunnel's network settings. DNS in v1; Proxy v2.
+	// See doc/wg-dns-proxy-push-design.md.
+	Policy    *WGPolicy `json:"policy,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WGPolicy — DNS + HTTP-proxy settings the operator pushes to devices.
+type WGPolicy struct {
+	DNS   *DNSPolicy   `json:"dns,omitempty"`
+	Proxy *ProxyPolicy `json:"proxy,omitempty"` // v2
+}
+
+// DNSPolicy maps onto NEDNSSettings (iOS) / VpnService.Builder DNS (Android).
+type DNSPolicy struct {
+	Servers       []string `json:"servers,omitempty"`
+	MatchDomains  []string `json:"match_domains,omitempty"`
+	SearchDomains []string `json:"search_domains,omitempty"`
+	Mode          string   `json:"mode,omitempty"` // "plain" | "doh"
+	DoHURL        string   `json:"doh_url,omitempty"`
+}
+
+// ProxyPolicy maps onto NEProxySettings (iOS) / ProxyInfo (Android). v2.
+type ProxyPolicy struct {
+	HTTP          string   `json:"http,omitempty"`  // host:port
+	HTTPS         string   `json:"https,omitempty"` // host:port
+	PACURL        string   `json:"pac_url,omitempty"`
+	MatchDomains  []string `json:"match_domains,omitempty"`
+	Bypass        []string `json:"bypass,omitempty"`
+	ExcludeSimple bool     `json:"exclude_simple,omitempty"`
 }
 
 // Configured iff a device has claimed this hub (pubkey + endpoint set).
@@ -51,14 +80,15 @@ func (h *WGHub) Configured() bool {
 	return strings.TrimSpace(h.Pubkey) != ""
 }
 
-const wgHubColumns = `id, slug, label, pubkey, endpoint, wg_ip, mesh_cidr, keepalive_sec, refresh_sec, bound_device_id, advertised_routes_json, created_at, updated_at`
+const wgHubColumns = `id, slug, label, pubkey, endpoint, wg_ip, mesh_cidr, keepalive_sec, refresh_sec, bound_device_id, advertised_routes_json, policy_json, created_at, updated_at`
 
 func scanWGHub(scanner interface{ Scan(...any) error }) (*WGHub, error) {
 	var h WGHub
 	var bound sql.NullInt64
 	var routesJSON sql.NullString
+	var policyJSON sql.NullString
 	if err := scanner.Scan(&h.ID, &h.Slug, &h.Label, &h.Pubkey, &h.Endpoint, &h.WGIP, &h.MeshCIDR,
-		&h.KeepaliveSec, &h.RefreshSec, &bound, &routesJSON, &h.CreatedAt, &h.UpdatedAt); err != nil {
+		&h.KeepaliveSec, &h.RefreshSec, &bound, &routesJSON, &policyJSON, &h.CreatedAt, &h.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if bound.Valid {
@@ -67,6 +97,9 @@ func scanWGHub(scanner interface{ Scan(...any) error }) (*WGHub, error) {
 	}
 	if routesJSON.Valid && routesJSON.String != "" {
 		_ = json.Unmarshal([]byte(routesJSON.String), &h.AdvertisedRoutes)
+	}
+	if policyJSON.Valid && policyJSON.String != "" {
+		_ = json.Unmarshal([]byte(policyJSON.String), &h.Policy)
 	}
 	return &h, nil
 }
@@ -208,14 +241,18 @@ func (p *Plugin) updateWGHub(h *WGHub, now time.Time) (*WGHub, error) {
 	if len(h.AdvertisedRoutes) > 0 {
 		routesJSON, _ = json.Marshal(h.AdvertisedRoutes)
 	}
+	var policyJSON []byte
+	if h.Policy != nil {
+		policyJSON, _ = json.Marshal(h.Policy)
+	}
 	_, err := p.DB.Exec(
 		`UPDATE wg_hubs
 		    SET label = $2, endpoint = $3, wg_ip = $4, mesh_cidr = $5,
 		        keepalive_sec = $6, refresh_sec = $7, advertised_routes_json = $8,
-		        updated_at = $9
+		        policy_json = $9, updated_at = $10
 		  WHERE id = $1`,
 		h.ID, strings.TrimSpace(h.Label), strings.TrimSpace(h.Endpoint), h.WGIP, h.MeshCIDR,
-		h.KeepaliveSec, h.RefreshSec, nullJSONB(routesJSON), now,
+		h.KeepaliveSec, h.RefreshSec, nullJSONB(routesJSON), nullJSONB(policyJSON), now,
 	)
 	if err != nil {
 		return nil, err
