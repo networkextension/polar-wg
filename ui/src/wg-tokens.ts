@@ -32,7 +32,25 @@ import { byId } from "@networkextension/polar-ui-common/lib/dom";
 import { hydrateSiteBrand, hydrateSidebarFoot } from "@networkextension/polar-ui-common/lib/site";
 import { mountPlatformNav } from "@networkextension/polar-ui-common/lib/sidebar";
 import { bindThemeSync, initStoredTheme } from "@networkextension/polar-ui-common/lib/theme";
-import { NEON, freshnessColor, nocGlowDefs, nocPanel } from "@networkextension/polar-ui-common/lib/neon-topo";
+import {
+  NEON,
+  NOC,
+  freshnessColor,
+  nocPanel,
+  nocSpoke,
+  nocSvg,
+} from "@networkextension/polar-ui-common/lib/neon-topo";
+
+// Even points on an ellipse — wide rings for 16:9/16:10 screens so all nodes
+// fit horizontally without vertical scroll. startDeg from top, clockwise.
+function ellipseLayout(n: number, cx: number, cy: number, rx: number, ry: number, startDeg = -90): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const ang = ((startDeg + (360 * i) / Math.max(1, n)) * Math.PI) / 180;
+    out.push({ x: cx + Math.cos(ang) * rx, y: cy + Math.sin(ang) * ry });
+  }
+  return out;
+}
 import type {
   WGBundle,
   WGDevice,
@@ -108,8 +126,36 @@ const hubStatusRefreshBtn = byId<HTMLButtonElement>("hubStatusRefreshBtn");
 const hubTopology = byId<HTMLElement>("hubTopology");
 const hubTopologyWrap = byId<HTMLElement>("hubTopologyWrap");
 const hubViewToggle = byId<HTMLButtonElement>("hubViewToggle");
+const hubFsBtn = byId<HTMLButtonElement>("hubFsBtn");
 // Star-topology is the default view; the toggle flips to the legacy card list.
 let topoView = true;
+
+// Fullscreen the topology (NOC big-screen). Safari needs the webkit prefix.
+function wgFsActive(): boolean {
+  const d = document as Document & { webkitFullscreenElement?: Element };
+  return !!(d.fullscreenElement || d.webkitFullscreenElement);
+}
+function wgSyncFs(): void {
+  const on = wgFsActive();
+  if (hubTopologyWrap) {
+    hubTopologyWrap.style.background = on ? "#070a14" : "";
+    hubTopologyWrap.style.padding = on ? "20px" : "";
+    hubTopologyWrap.style.overflow = on ? "auto" : "";
+  }
+  if (hubFsBtn) hubFsBtn.textContent = on ? "⛶ 退出全屏" : "⛶ 全屏";
+}
+hubFsBtn?.addEventListener("click", () => {
+  if (!hubTopologyWrap) return;
+  const el = hubTopologyWrap as HTMLElement & { webkitRequestFullscreen?: () => void };
+  const d = document as Document & { webkitExitFullscreen?: () => void };
+  if (wgFsActive()) {
+    (d.exitFullscreen || d.webkitExitFullscreen)?.call(d);
+  } else {
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+  }
+});
+document.addEventListener("fullscreenchange", wgSyncFs);
+document.addEventListener("webkitfullscreenchange", wgSyncFs);
 
 function esc(s: string): string {
   return s
@@ -328,119 +374,120 @@ function handshakeColor(ageSec?: number): string {
   return freshnessColor(ageSec);
 }
 
-type Pt = { x: number; y: number };
+// renderTopology — fleet-map style, mirroring the hosts 主机拓扑 template: a
+// center "WG MESH" node, hubs on the inner ring, device peers fanned on the
+// outer ring(s), each colored by status / handshake freshness. Built on the
+// shared neon-topo kit; device nodes deep-link to their Hosts detail.
+type TopoNode = {
+  name: string;
+  sub: string;
+  color: string;
+  tip: string;
+  r: number;
+  isHub: boolean;
+  hostID?: string;
+};
 
-// renderTopology draws a star-of-stars: each hub is a star center, its live
-// peers fan out as device spokes (colored by handshake freshness), and any
-// peer whose pubkey matches ANOTHER hub is drawn as a hub↔hub interconnect.
 function renderTopology(rows: WGHubStatusRow[]): string {
+  const GLOW = "noc-glow"; // nocSvg's default glow-filter id
   const hubByPubkey = new Map<string, WGHubStatusRow>();
   rows.forEach((r) => {
     if (r.pubkey) hubByPubkey.set(r.pubkey, r);
   });
 
-  const N = rows.length;
-  const W = 1000;
-  const H = N <= 1 ? 560 : Math.max(640, 380 + N * 40);
+  // Inner ring: hubs (blue=ok / red=stale / slate=never reported).
+  const hubs: TopoNode[] = rows.map((r) => {
+    const col = !r.status ? NEON.slate : r.status.stale ? NEON.red : NEON.blue;
+    const peerCount = r.status?.peer_count ?? (r.status?.peers?.length ?? 0);
+    const egress = r.advertised_routes ?? [];
+    return {
+      name: r.label || r.slug,
+      sub: `${peerCount} peers`,
+      color: col,
+      r: 26,
+      isHub: true,
+      tip: `${r.label || r.slug}\n${r.endpoint || "no endpoint"}\nwg ${r.wg_ip || "—"}\nmesh ${r.mesh_cidr || "—"}\n${peerCount} peers${r.status?.stale ? " (stale)" : ""}${egress.length ? "\n出口: " + egress.join(", ") : ""}`,
+    };
+  });
+
+  // Outer rings: unique device peers across all hubs (skip hub↔hub peers).
+  const seen = new Set<string>();
+  const devices: TopoNode[] = [];
+  rows.forEach((r) =>
+    (r.status?.peers ?? []).forEach((p) => {
+      const pk = p.public_key || "";
+      if (pk && hubByPubkey.has(pk)) return; // that peer is itself a hub
+      const key = pk || `${p.allowed_ips || ""}|${p.endpoint || ""}`;
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+      const col = handshakeColor(p.handshake_age_sec);
+      const name = (pk && pubkeyToName.get(pk)) || truncPubkey(pk);
+      const wgip = ((pk && pubkeyToWGIP.get(pk)) || p.allowed_ips || "").split(",")[0].split("/")[0].trim();
+      const hs = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
+      const hostID = pk ? pubkeyToHostID.get(pk) : undefined;
+      devices.push({
+        name,
+        sub: wgip || hs,
+        color: col,
+        r: 18,
+        isHub: false,
+        hostID,
+        tip: `${name}\nwg ${wgip || "—"}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`,
+      });
+    }),
+  );
+
+  // 16:9 wide canvas + elliptical rings so all nodes fit horizontally without
+  // vertical scroll on a 16:9 / 16:10 screen.
+  const W = 1280;
+  const H = 720;
   const cx = W / 2;
   const cy = H / 2;
-  const hubRing = N > 1 ? Math.min(W, H) * 0.3 : 0;
-
-  const hubPos = new Map<number, Pt>();
-  rows.forEach((r, i) => {
-    const a = ((-90 + (360 * i) / N) * Math.PI) / 180;
-    hubPos.set(r.id, { x: cx + Math.cos(a) * hubRing, y: cy + Math.sin(a) * hubRing });
-  });
-
-  const hubLinks: string[] = [];
+  const perRing = 14;
+  const devRings = Math.max(1, Math.ceil(devices.length / perRing));
   const spokes: string[] = [];
-  const devNodes: string[] = [];
-  const hubNodes: string[] = [];
-  const seenLink = new Set<string>();
+  const nodes: string[] = [];
 
-  rows.forEach((r) => {
-    const hp = hubPos.get(r.id);
-    if (!hp) return;
-    const peers = r.status?.peers ?? [];
-    const interHub = peers.filter(
-      (p) => p.public_key && hubByPubkey.has(p.public_key) && p.public_key !== r.pubkey,
-    );
-    const devicePeers = peers.filter(
-      (p) => !p.public_key || !hubByPubkey.has(p.public_key) || p.public_key === r.pubkey,
-    );
-
-    // hub ↔ hub interconnect links (dedup A-B / B-A)
-    interHub.forEach((p) => {
-      const other = hubByPubkey.get(p.public_key!);
-      if (!other) return;
-      const key = [r.id, other.id].sort((a, b) => a - b).join("-");
-      if (seenLink.has(key)) return;
-      seenLink.add(key);
-      const op = hubPos.get(other.id);
-      if (!op) return;
-      hubLinks.push(
-        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${op.x.toFixed(1)}" y2="${op.y.toFixed(1)}" class="topo-hublink" stroke="${handshakeColor(p.handshake_age_sec)}" filter="url(#topo-glow)"><title>${esc(r.slug)} ↔ ${esc(other.slug)}</title></line>`,
-      );
-    });
-
-    // device spokes fan outward from the hub
-    const M = devicePeers.length;
-    const outward = N > 1 ? Math.atan2(hp.y - cy, hp.x - cx) : -Math.PI / 2;
-    const spokeR = Math.min(240, 95 + M * 5);
-    const arc = N > 1 ? Math.PI * 1.25 : Math.PI * 2;
-    devicePeers.forEach((p, j) => {
-      const a =
-        N > 1
-          ? outward + (M === 1 ? 0 : (j / (M - 1) - 0.5) * arc)
-          : (2 * Math.PI * j) / Math.max(1, M) - Math.PI / 2;
-      const dp = { x: hp.x + Math.cos(a) * spokeR, y: hp.y + Math.sin(a) * spokeR };
-      const col = handshakeColor(p.handshake_age_sec);
-      const name = (p.public_key && pubkeyToName.get(p.public_key)) || truncPubkey(p.public_key);
-      const hostID = p.public_key ? pubkeyToHostID.get(p.public_key) : undefined;
-      const hs = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
-      // WG IP shown on hover: prefer the device's assigned mesh IP (set at
-      // register, survives "never handshaked"); fall back to the live
-      // allowed-ips /32 if the peer isn't in the devices list.
-      const wgip = ((p.public_key && pubkeyToWGIP.get(p.public_key)) || p.allowed_ips || "")
-        .split(",")[0].split("/")[0].trim();
-      const tip = `${name}\nwg ${wgip || "—"}\n${p.endpoint || "no endpoint"}\nhandshake ${hs}\nrx ${fmtBytes(p.bytes_rx ?? 0)} · tx ${fmtBytes(p.bytes_tx ?? 0)}${hostID ? "\n点击 → Hosts 详情" : ""}`;
+  const place = (list: TopoNode[], rx: number, ry: number, startDeg: number): void => {
+    const pts = ellipseLayout(list.length, cx, cy, rx, ry, startDeg);
+    list.forEach((n, i) => {
+      const { x, y } = pts[i];
       spokes.push(
-        `<line x1="${hp.x.toFixed(1)}" y1="${hp.y.toFixed(1)}" x2="${dp.x.toFixed(1)}" y2="${dp.y.toFixed(1)}" class="topo-spoke" stroke="${col}" filter="url(#topo-glow)"/>`,
+        nocSpoke({ x1: cx, y1: cy, x2: x, y2: y, color: n.color, opacity: n.color === NEON.slate ? 0.3 : 0.7, dashed: n.isHub }),
       );
-      const lx = dp.x + Math.cos(a) * 10;
-      const ly = dp.y + Math.sin(a) * 10 + 3;
-      const anchor = Math.cos(a) < -0.25 ? "end" : Math.cos(a) > 0.25 ? "start" : "middle";
-      const node = `<g class="topo-dev"><circle cx="${dp.x.toFixed(1)}" cy="${dp.y.toFixed(1)}" r="6" fill="${col}" filter="url(#topo-glow)"><title>${esc(tip)}</title></circle><text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" class="topo-dev-label">${esc(name)}</text></g>`;
-      devNodes.push(hostID ? `<a href="${hostsLinkURL(hostID)}" target="_top">${node}</a>` : node);
+      const nm = n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name;
+      const open = n.hostID ? `<a href="${esc(hostsLinkURL(n.hostID))}" target="_top" style="cursor:pointer">` : "<g>";
+      const close = n.hostID ? "</a>" : "</g>";
+      nodes.push(
+        `${open}<g filter="url(#${GLOW})">` +
+          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${n.r}" fill="${NOC.nodeFill}" stroke="${n.color}" stroke-width="${n.isHub ? 2.4 : 1.6}"><title>${esc(n.tip)}</title></circle>` +
+          (n.isHub
+            ? `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="middle" fill="${n.color}" font-size="11" font-weight="700" style="pointer-events:none">HUB</text>`
+            : "") +
+          `</g>` +
+          `<text x="${x.toFixed(1)}" y="${(y + n.r + 15).toFixed(1)}" text-anchor="middle" fill="${NOC.textDim}" font-size="11" font-weight="600" style="pointer-events:none">${esc(nm)}</text>` +
+          `<text x="${x.toFixed(1)}" y="${(y + n.r + 27).toFixed(1)}" text-anchor="middle" fill="${n.color}" font-size="9" style="pointer-events:none">${esc(n.sub)}</text>` +
+          close,
+      );
     });
+  };
 
-    // hub node on top
-    const peerCount = r.status?.peer_count ?? peers.length;
-    const fill = !r.status ? NEON.slate : r.status.stale ? NEON.red : NEON.blue;
-    const egress = r.advertised_routes ?? [];
-    const egressTip = egress.length
-      ? `\n出口: ${egress.map((rt) => (rt === "0.0.0.0/0" ? "0.0.0.0/0 (全隧道)" : rt)).join(", ")}`
-      : "";
-    const htip = `${r.label || r.slug}\n${r.endpoint || "no endpoint"}\nwg ${r.wg_ip || "—"}\nmesh ${r.mesh_cidr || "—"}\n${peerCount} peers${r.status?.stale ? " (stale)" : ""}${egressTip}`;
-    // P3 annotations: owned /24 under the label; 🌍 badge when the hub
-    // declares egress routes (hover for the route list).
-    const cidrLine = r.mesh_cidr
-      ? `<text x="${hp.x.toFixed(1)}" y="${(hp.y + 54).toFixed(1)}" text-anchor="middle" class="topo-hub-cidr">${esc(r.mesh_cidr)}</text>`
-      : "";
-    const egressBadge = egress.length
-      ? `<text x="${(hp.x + 18).toFixed(1)}" y="${(hp.y - 16).toFixed(1)}" class="topo-egress">🌍<title>${esc("出口路由:\n" + egress.join("\n"))}</title></text>`
-      : "";
-    hubNodes.push(
-      `<g class="topo-hub"><circle cx="${hp.x.toFixed(1)}" cy="${hp.y.toFixed(1)}" r="22" fill="${fill}" filter="url(#topo-glow)"><title>${esc(htip)}</title></circle><text x="${hp.x.toFixed(1)}" y="${(hp.y + 5).toFixed(1)}" text-anchor="middle" class="topo-hub-count">${peerCount}</text><text x="${hp.x.toFixed(1)}" y="${(hp.y + 40).toFixed(1)}" text-anchor="middle" class="topo-hub-label">${esc(r.label || r.slug)}</text>${cidrLine}${egressBadge}</g>`,
-    );
-  });
+  place(hubs, 210, 120, -90);
+  for (let r = 0; r < devRings; r++) {
+    const rx = 470 + r * 250;
+    const ry = Math.min(rx * 0.5, cy - 80);
+    place(devices.slice(r * perRing, r * perRing + perRing), rx, ry, -90 + (r + 1) * 14);
+  }
 
-  // Dark-NOC chrome (shared with the hosts panel): deep blue→black panel +
-  // neon glow filter. Layer order: hub links, device spokes, device nodes,
-  // hub nodes on top.
-  const svg = `<svg viewBox="0 0 ${W} ${H}" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="WG mesh topology">${nocGlowDefs("topo-glow")}${hubLinks.join("")}${spokes.join("")}${devNodes.join("")}${hubNodes.join("")}</svg>`;
+  const center =
+    `<circle cx="${cx}" cy="${cy}" r="34" fill="${NOC.nodeFill}" stroke="${NEON.cyan}" stroke-width="2" filter="url(#${GLOW})"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="42" fill="none" stroke="${NEON.cyan}" stroke-width="1" opacity="0.3"/>` +
+    `<text x="${cx}" y="${(cy - 1).toFixed(1)}" text-anchor="middle" fill="${NOC.textBright}" font-size="14" font-weight="700">${devices.length}</text>` +
+    `<text x="${cx}" y="${(cy + 13).toFixed(1)}" text-anchor="middle" fill="${NEON.cyan}" font-size="9">WG MESH</text>`;
+  const svg = nocSvg({ width: W, height: H, inner: spokes.join("") + center + nodes.join(""), ariaLabel: "WG mesh topology" });
   return nocPanel({ svg });
 }
+
 
 function applyStatusView(): void {
   if (hubStatusGrid) hubStatusGrid.hidden = topoView;
