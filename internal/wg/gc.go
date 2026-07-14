@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -57,10 +58,28 @@ func wgStaleGCInterval() time.Duration {
 	return wgStaleGCIntervalDefault
 }
 
+// wgStaleGCEnabled gates the sweeper. DEFAULT OFF: the GC removed
+// devices whose enroll token had no expiry at all (7 days offline was
+// enough — a lab box asleep for a week came back to a hub that had
+// dropped its peer, tx-only/rx-0 symptom). Removal is now an explicit
+// operator opt-in per deployment: WG_STALE_GC_ENABLED=1 in the
+// platform-managed env file, tuned via the existing TTL/interval envs.
+func wgStaleGCEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WG_STALE_GC_ENABLED"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 // startWGStaleDeviceGC kicks off the background sweeper. Returns
 // immediately. Loop exits when ctx is cancelled.
 func (p *Plugin) startWGStaleDeviceGC(ctx context.Context) {
 	if p.DB == nil {
+		return
+	}
+	if !wgStaleGCEnabled() {
+		log.Printf("wg-mac: stale-device GC disabled (set WG_STALE_GC_ENABLED=1 to enable)")
 		return
 	}
 	interval := wgStaleGCInterval()
