@@ -47,6 +47,21 @@
       .wg-warn { background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; border-radius: 8px;
         padding: 8px 10px; font-size: 13px; font-weight: 600; margin: 0 0 12px 0; }
       @media (prefers-color-scheme: dark) { .wg-warn { background: #3a2410; border-color: #b45309; color: #fdba74; } }
+      /* --- 走查修复 2026-07-27 ---------------------------------------------
+         宽表格（Hubs 出口路由列 / Devices 11 列）以前被 .lp-main 的
+         overflow:hidden 直接裁掉且没有滚动条 —— 表格容器自己横向可滚。 */
+      .lp-preview-body { overflow-x: auto; }
+      /* 单元格 nowrap：挤压时 CJK 会逐字竖排、按钮纵向堆叠，行高爆炸到一屏
+         只显示 4 台设备；nowrap 后行高恢复单行，宽度交给上面的横向滚动。 */
+      .lp-table th, .lp-table td { white-space: nowrap; }
+      /* 表格行内的 .btn-inline（含出口 select）用的是页面级 CTA 的
+         12px/16px 大内边距 —— 行内场景收紧到与文字等高。 */
+      .lp-table .btn-inline, .lp-table select.btn-inline {
+        padding: 4px 10px; font-size: 12px; font-weight: 500; }
+      /* 「发布 link」与同行两个 .lp-input select 等高，降字重。 */
+      #publishLinkBtn { padding: 6px 12px; font-size: 13px; font-weight: 600; }
+      /* 「显示已下线」「隐藏已撤销」复选框标签：防逐字竖排。 */
+      .lp-preview-head label.meta-subtitle { white-space: nowrap; flex-shrink: 0; }
     </style>
   </head>
   <body class="lp-page">
@@ -54,7 +69,7 @@
       <aside class="lp-sidebar lp-sidebar-wide">
         <a class="lp-brand" href="https://zen.4950.store:2443/dashboard.html" data-site-brand>
           <img data-site-icon alt="" />
-          <span class="lp-brand-name" data-site-name>Polar-</span>
+          <span class="lp-brand-name" data-site-name></span>
         </a>
         <nav class="lp-nav">
           <a class="lp-nav-item" href="https://zen.4950.store:2443/dashboard.html">
