@@ -612,6 +612,23 @@ func (p *Plugin) createWGTokenForHub(label, createdByUserID, hubSlug, hubLabel, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if hub != nil && hub.BoundDeviceID != nil {
+		// A live hub already owns this slug: a hub-token minted against it
+		// can never register (bindHubDevice → hub_already_bound), and the
+		// operator almost certainly meant a NEW hub — the form asks for the
+		// new hub's slug, and "home" is what people type when they mean
+		// "the hub I'm looking at". Refuse loudly instead of silently
+		// dropping their endpoint/mesh; re-issue for a crashed hub goes
+		// through /wg-hubs/:id/reset-bind first.
+		return nil, nil, fmt.Errorf("hub slug %q is already live (bound to device #%d, endpoint %s, mesh %s); choose a new slug for a new hub, or reset-bind that hub first to re-issue its token",
+			hubSlug, *hub.BoundDeviceID, hub.Endpoint, hub.MeshCIDR)
+	}
+	if hub != nil && (hub.Endpoint != publicEndpoint || (meshCIDR != "" && hub.MeshCIDR != meshCIDR)) {
+		// Unbound hub with the same slug but different prestamps: don't
+		// silently keep the old values either.
+		return nil, nil, fmt.Errorf("hub slug %q already exists with endpoint %s / mesh %s (you asked for %s / %s); reuse those values or pick another slug",
+			hubSlug, hub.Endpoint, hub.MeshCIDR, publicEndpoint, meshCIDR)
+	}
 	if hub == nil {
 		// Mint-time disjointness guard: cross-hub routing (P1) requires
 		// every hub's /24 to be unique; an operator-supplied mesh_cidr
