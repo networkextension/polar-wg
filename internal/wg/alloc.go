@@ -339,7 +339,9 @@ func currentHubSlug(tx *sql.Tx, hubID int64) string {
 }
 
 func lookupDeviceByPubkeyTx(tx *sql.Tx, pubkey string) (*WGDevice, error) {
-	row := tx.QueryRow(`SELECT `+wgDeviceColumns+` FROM wg_devices WHERE pubkey = $1`, pubkey)
+	// Live rows only: a soft-removed device (left / released) must not block a
+	// re-register with the same pubkey — the partial unique index allows it.
+	row := tx.QueryRow(`SELECT `+wgDeviceColumns+` FROM wg_devices WHERE pubkey = $1 AND removed_at IS NULL`, pubkey)
 	d, err := scanWGDevice(row, false)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
