@@ -165,6 +165,10 @@ func (p *Plugin) RegisterRoutes(r gin.IRouter) {
 	internal := r.Group("/internal/v1")
 	{
 		internal.POST("/wg-devices/link", p.handleInternalWGDeviceLink)
+		// sibling-plugin machine enrolment (polar-cloud VMs) — internal_cloud.go
+		internal.POST("/wg-tokens", p.handleInternalWGTokenMint)
+		internal.GET("/wg-tokens/:id", p.handleInternalWGTokenGet)
+		internal.POST("/wg-tokens/:id/release", p.handleInternalWGTokenRelease)
 	}
 
 	// /api/admin/wg-* — admin CRUD, Dock-auth-gated.
