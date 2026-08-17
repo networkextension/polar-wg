@@ -267,15 +267,22 @@ func (p *Plugin) allocateDevice(tx *sql.Tx, in wgRegisterInput, tok *WGToken, hu
 	now := time.Now().UTC()
 
 	var newID int64
+	// wg_endpoint = server-observed public IP + listen port (same convention as
+	// the hub path / heartbeat) — lets the peer builder tell "behind the hub's
+	// NAT" spokes apart at register time already.
+	observedEP := ""
+	if ip := strings.TrimSpace(in.PublicIP); ip != "" && in.WGListenPort > 0 {
+		observedEP = fmt.Sprintf("%s:%d", ip, in.WGListenPort)
+	}
 	err = tx.QueryRow(
 		`INSERT INTO wg_devices (
 		    device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver,
-		    wg_listen_port, lan_addrs_json, token_hash, token_expires_at, created_at, host_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		    wg_listen_port, lan_addrs_json, token_hash, token_expires_at, created_at, host_id, wg_endpoint)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		 RETURNING id`,
 		deviceID, hub.ID, site.ID, dIndex, deviceIP, strings.TrimSpace(in.Pubkey),
 		strings.TrimSpace(in.Hostname), strings.TrimSpace(in.OS), strings.TrimSpace(in.Arch), strings.TrimSpace(in.AgentVer),
-		in.WGListenPort, nullJSONB(lanJSON), tokenHash, tok.ExpiresAt, now, strings.TrimSpace(in.HostID),
+		in.WGListenPort, nullJSONB(lanJSON), tokenHash, tok.ExpiresAt, now, strings.TrimSpace(in.HostID), observedEP,
 	).Scan(&newID)
 	if err != nil {
 		return nil, err
