@@ -767,6 +767,10 @@ type WGDevice struct {
 	// advertised_routes this device wants. NULL/nil = no egress.
 	// 0.0.0.0/0 only takes effect when this equals the device's own hub.
 	EgressHubID *int64     `json:"egress_hub_id,omitempty"`
+	// Isolated: no LAN-direct peers (neither offered nor received) — hub-only.
+	// Set at register by guests behind a host NAT that isolates guests
+	// (VZ bridge100 members are PRIVATE), where "same site" ≠ reachable.
+	Isolated    bool       `json:"isolated"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
 	RemovedAt   *time.Time `json:"removed_at,omitempty"`
@@ -786,7 +790,7 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 		&d.ID, &d.DeviceID, &d.HubID, &d.SiteID, &d.DIndex, &d.DeviceIP, &d.Pubkey,
 		&d.Hostname, &d.OS, &d.Arch, &d.AgentVer, &d.WGListenPort, &lanJSON, &d.WGEndpoint,
 		&d.TokenHash, &tokenExpiresAt, &d.CreatedAt, &lastSeenAt, &removedAt, &d.HostID,
-		&egressHubID,
+		&egressHubID, &d.Isolated,
 	}
 	if hasSlug {
 		dest = append(dest, &siteSlug, &hubSlug)
@@ -824,7 +828,7 @@ func scanWGDevice(scanner interface{ Scan(...any) error }, hasSlug bool) (*WGDev
 	return &d, nil
 }
 
-const wgDeviceColumns = `id, device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver, wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, last_seen_at, removed_at, host_id, egress_hub_id`
+const wgDeviceColumns = `id, device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver, wg_listen_port, lan_addrs_json, wg_endpoint, token_hash, token_expires_at, created_at, last_seen_at, removed_at, host_id, egress_hub_id, isolated`
 
 func (p *Plugin) getWGDeviceByID(id int64) (*WGDevice, error) {
 	row := p.DB.QueryRow(`SELECT `+wgDeviceColumns+` FROM wg_devices WHERE id = $1`, id)

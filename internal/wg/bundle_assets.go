@@ -66,6 +66,9 @@ func (p *Plugin) ensureEgressColumns() error {
 		// DNS/HTTP-proxy push (doc/wg-dns-proxy-push-design.md): operator policy
 		// distributed to devices in the /v1/peers response.
 		`ALTER TABLE wg_hubs ADD COLUMN IF NOT EXISTS policy_json JSONB`,
+		// isolated devices (cloud VMs behind a host NAT that blocks guest↔guest
+		// traffic) never take part in same-site LAN-direct peering: hub-only.
+		`ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS isolated BOOLEAN NOT NULL DEFAULT FALSE`,
 	}
 	for _, s := range stmts {
 		if _, err := p.DB.Exec(s); err != nil {

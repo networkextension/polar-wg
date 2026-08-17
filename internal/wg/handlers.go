@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -60,6 +61,8 @@ type wgRegisterRequest struct {
 	LANAddrs []WGLanAddr `json:"lan_addrs"`
 	WGListen int         `json:"wg_listen"`
 	SiteSlug string      `json:"site_slug"`
+	// Isolated: hub-only peering (see WGDevice.Isolated). Cloud VMs set it.
+	Isolated bool `json:"isolated"`
 }
 
 type wgPeerResponse struct {
@@ -116,6 +119,7 @@ func (p *Plugin) handleWGRegister(c *gin.Context) {
 		Arch:         req.Arch,
 		AgentVer:     req.AgentVer,
 		LANAddrs:     req.LANAddrs,
+		Isolated:     req.Isolated,
 		WGListenPort: req.WGListen,
 		SiteSlug:     req.SiteSlug,
 		PublicIP:     publicIP,
@@ -225,8 +229,14 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 	if err != nil {
 		return nil, fmt.Errorf("lan peers: %w", err)
 	}
+	if dev.Isolated {
+		lanPeers = nil // hub-only
+	}
 	peerOut := make([]wgPeerResponse, 0, len(lanPeers)+1)
 	for _, p := range lanPeers {
+		if p.Isolated {
+			continue // it can't be reached directly either
+		}
 		endpoint := ""
 		if len(p.LANAddrs) > 0 {
 			ip := firstLANIP(p.LANAddrs[0].CIDR)
@@ -275,7 +285,7 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		peerOut = append(peerOut, wgPeerResponse{
 			Pubkey:       hub.Pubkey,
 			WGIP:         hub.WGIP,
-			Endpoint:     hub.Endpoint,
+			Endpoint:     p.hubEndpointFor(hub, dev),
 			SiteSlug:     "hub",
 			AllowedExtra: allowedExtra,
 		})
@@ -1142,4 +1152,79 @@ func (p *Plugin) handleAdminWGSiteList(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"sites": sites})
+}
+
+// hubEndpointFor picks the hub endpoint a spoke should dial. Spokes behind the
+// SAME NAT as the hub (their server-observed public IP == the IP the hub's
+// public endpoint resolves to) usually cannot hairpin the public address; hand
+// them the hub device's LAN endpoint (wg_devices.wg_endpoint of the bound hub
+// device, e.g. 192.168.11.197:1639) instead. Everyone else gets hub.Endpoint.
+// Seen 2026-08-17: cloud VMs on the hub's LAN handshake never via the public
+// endpoint, instantly via the LAN one.
+func (p *Plugin) hubEndpointFor(hub *WGHub, dev *WGDevice) string {
+	ep := hub.Endpoint
+	if hub == nil || dev == nil || hub.BoundDeviceID == nil || dev.WGEndpoint == "" || ep == "" {
+		return ep
+	}
+	hubHost, _, err := net.SplitHostPort(ep)
+	if err != nil {
+		return ep
+	}
+	devHost, _, err := net.SplitHostPort(dev.WGEndpoint)
+	if err != nil {
+		return ep
+	}
+	if !hubEndpointResolvesTo(hubHost, devHost) {
+		return ep
+	}
+	hd, err := p.getWGDeviceByID(*hub.BoundDeviceID)
+	if err != nil || hd == nil || hd.WGEndpoint == "" {
+		return ep
+	}
+	if h, _, err := net.SplitHostPort(hd.WGEndpoint); err == nil {
+		if ip := net.ParseIP(h); ip != nil && ip.IsPrivate() {
+			return hd.WGEndpoint
+		}
+	}
+	return ep
+}
+
+var hubResolveCache = struct {
+	sync.Mutex
+	m map[string]hubResolveEntry
+}{m: map[string]hubResolveEntry{}}
+
+type hubResolveEntry struct {
+	ips []string
+	at  time.Time
+}
+
+// hubEndpointResolvesTo: does hub host (name or literal) resolve to ip? DNS is
+// cached 5 minutes — /v1/peers is polled by every spoke.
+func hubEndpointResolvesTo(host, ip string) bool {
+	if host == ip {
+		return true
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	hubResolveCache.Lock()
+	e, ok := hubResolveCache.m[host]
+	hubResolveCache.Unlock()
+	if !ok || time.Since(e.at) > 5*time.Minute {
+		ips, err := net.LookupHost(host)
+		if err != nil {
+			ips = nil
+		}
+		e = hubResolveEntry{ips: ips, at: time.Now()}
+		hubResolveCache.Lock()
+		hubResolveCache.m[host] = e
+		hubResolveCache.Unlock()
+	}
+	for _, x := range e.ips {
+		if x == ip {
+			return true
+		}
+	}
+	return false
 }

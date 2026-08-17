@@ -28,7 +28,7 @@ type wgInstallScriptInput struct {
 
 const wgInstallScriptTemplate = `#!/bin/bash
 # wg-mac join installer (Polar control plane).
-# Usage: curl -sSL <server>/v1/install | sudo bash -s -- --token=<TOKEN> [--hostname=NAME] [--site=SLUG]
+# Usage: curl -sSL <server>/v1/install | sudo bash -s -- --token=<TOKEN> [--hostname=NAME] [--site=SLUG] [--isolated]
 set -euo pipefail
 
 [[ $EUID -eq 0 ]] || { echo "must run as root"; exit 1; }
@@ -44,12 +44,14 @@ TOKEN=""
 HOSTNAME_OVERRIDE=""
 SITE_SLUG=""
 HOST_ID=""
+ISOLATED=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --token=*)    TOKEN="${1#*=}";;
     --hostname=*) HOSTNAME_OVERRIDE="${1#*=}";;
     --site=*)     SITE_SLUG="${1#*=}";;
     --host-id=*)  HOST_ID="${1#*=}";;
+    --isolated)   ISOLATED=1;;   # hub-only peering (VM behind a guest-isolating host NAT)
     *) echo "unknown arg: $1" >&2; exit 1;;
   esac
   shift
@@ -137,7 +139,7 @@ echo "==> registering with control plane"
 # Export BEFORE the python heredoc so the child process inherits the
 # env. (Originally placed below; python ran first and KeyError'd on
 # 'TOKEN'.)
-export TOKEN PUB HOSTNAME_REPORT OS_RAW ARCH AGENT_VER LAN_JSON WG_LISTEN SITE_SLUG SERVER MESH_CIDR PRIV HOST_ID
+export TOKEN PUB HOSTNAME_REPORT OS_RAW ARCH AGENT_VER LAN_JSON WG_LISTEN SITE_SLUG SERVER MESH_CIDR PRIV HOST_ID ISOLATED
 REGISTER_BODY=$(python3 - <<PYREG
 import json, os
 body = {
@@ -154,6 +156,8 @@ body = {
 hid = os.environ.get("HOST_ID", "").strip()
 if hid:
   body["host_id"] = hid  # cross-link to polar-hosts; server stamps wg_devices.host_id
+if os.environ.get("ISOLATED"):
+  body["isolated"] = True  # hub-only: no LAN-direct peers offered/received
 print(json.dumps(body))
 PYREG
 )

@@ -269,3 +269,15 @@ func TestSubnetRoutes(t *testing.T) {
 		t.Fatalf("subnetRoutes = %v, want %v", got, want)
 	}
 }
+
+func TestHubEndpointResolvesTo(t *testing.T) {
+	if !hubEndpointResolvesTo("58.37.118.81", "58.37.118.81") {
+		t.Fatal("literal match")
+	}
+	if hubEndpointResolvesTo("58.37.118.81", "1.2.3.4") {
+		t.Fatal("literal mismatch")
+	}
+	if !hubEndpointResolvesTo("localhost", "127.0.0.1") && !hubEndpointResolvesTo("localhost", "::1") {
+		t.Fatal("localhost should resolve to a loopback address")
+	}
+}
