@@ -61,6 +61,8 @@ type wgRegisterRequest struct {
 	LANAddrs []WGLanAddr `json:"lan_addrs"`
 	WGListen int         `json:"wg_listen"`
 	SiteSlug string      `json:"site_slug"`
+	// Isolated: hub-only peering (see WGDevice.Isolated). Cloud VMs set it.
+	Isolated bool `json:"isolated"`
 }
 
 type wgPeerResponse struct {
@@ -117,6 +119,7 @@ func (p *Plugin) handleWGRegister(c *gin.Context) {
 		Arch:         req.Arch,
 		AgentVer:     req.AgentVer,
 		LANAddrs:     req.LANAddrs,
+		Isolated:     req.Isolated,
 		WGListenPort: req.WGListen,
 		SiteSlug:     req.SiteSlug,
 		PublicIP:     publicIP,
@@ -226,8 +229,14 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 	if err != nil {
 		return nil, fmt.Errorf("lan peers: %w", err)
 	}
+	if dev.Isolated {
+		lanPeers = nil // hub-only
+	}
 	peerOut := make([]wgPeerResponse, 0, len(lanPeers)+1)
 	for _, p := range lanPeers {
+		if p.Isolated {
+			continue // it can't be reached directly either
+		}
 		endpoint := ""
 		if len(p.LANAddrs) > 0 {
 			ip := firstLANIP(p.LANAddrs[0].CIDR)

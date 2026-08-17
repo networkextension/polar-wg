@@ -29,6 +29,7 @@ type wgRegisterInput struct {
 	Arch         string
 	AgentVer     string
 	LANAddrs     []WGLanAddr
+	Isolated     bool
 	WGListenPort int
 	// SiteSlug overrides the auto-by-LAN site allocation. Empty = auto.
 	SiteSlug string
@@ -277,12 +278,12 @@ func (p *Plugin) allocateDevice(tx *sql.Tx, in wgRegisterInput, tok *WGToken, hu
 	err = tx.QueryRow(
 		`INSERT INTO wg_devices (
 		    device_id, hub_id, site_id, d_index, device_ip, pubkey, hostname, os, arch, agent_ver,
-		    wg_listen_port, lan_addrs_json, token_hash, token_expires_at, created_at, host_id, wg_endpoint)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		    wg_listen_port, lan_addrs_json, token_hash, token_expires_at, created_at, host_id, wg_endpoint, isolated)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		 RETURNING id`,
 		deviceID, hub.ID, site.ID, dIndex, deviceIP, strings.TrimSpace(in.Pubkey),
 		strings.TrimSpace(in.Hostname), strings.TrimSpace(in.OS), strings.TrimSpace(in.Arch), strings.TrimSpace(in.AgentVer),
-		in.WGListenPort, nullJSONB(lanJSON), tokenHash, tok.ExpiresAt, now, strings.TrimSpace(in.HostID), observedEP,
+		in.WGListenPort, nullJSONB(lanJSON), tokenHash, tok.ExpiresAt, now, strings.TrimSpace(in.HostID), observedEP, in.Isolated,
 	).Scan(&newID)
 	if err != nil {
 		return nil, err
