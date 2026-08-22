@@ -19,6 +19,7 @@ package wg
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -183,7 +184,7 @@ func (p *Plugin) extractDeviceBearer(c *gin.Context) (*WGDevice, bool) {
 	}
 	dev, err := p.getWGDeviceByTokenHash(hashWGToken(raw))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return nil, false
 	}
 	if dev == nil {
@@ -800,7 +801,7 @@ func (p *Plugin) handleWGInstallScript(c *gin.Context) {
 func (p *Plugin) handleAdminWGHubList(c *gin.Context) {
 	hubs, err := p.listWGHubs()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"hubs": hubs})
@@ -814,7 +815,7 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 	}
 	existing, err := p.getWGHubByID(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	if existing == nil {
@@ -839,7 +840,7 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 	}
 	allHubs, err := p.listWGHubs()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	existing.Label = req.Label
@@ -878,7 +879,7 @@ func (p *Plugin) handleAdminWGHubUpdate(c *gin.Context) {
 	}
 	out, err := p.updateWGHub(existing, time.Now().UTC())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"hub": out})
@@ -907,7 +908,7 @@ func (p *Plugin) handleAdminWGHubResetBind(c *gin.Context) {
 		return
 	}
 	if err := p.clearWGHubBind(id, time.Now().UTC()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -918,7 +919,7 @@ func (p *Plugin) handleAdminWGHubResetBind(c *gin.Context) {
 func (p *Plugin) handleAdminWGHubLinkList(c *gin.Context) {
 	links, err := p.listWGHubLinks()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"links": links})
@@ -959,7 +960,7 @@ func (p *Plugin) handleAdminWGHubLinkDelete(c *gin.Context) {
 func (p *Plugin) handleAdminWGTokenList(c *gin.Context) {
 	toks, err := p.listWGTokens()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"tokens": toks})
@@ -1055,7 +1056,7 @@ func (p *Plugin) handleAdminWGDeviceList(c *gin.Context) {
 	includeRemoved := c.Query("include_removed") == "1"
 	devs, err := p.listWGDevices(includeRemoved)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"devices": devs})
@@ -1075,7 +1076,7 @@ func (p *Plugin) handleAdminWGDeviceUpdate(c *gin.Context) {
 	}
 	dev, err := p.getWGDeviceByID(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	if dev == nil || dev.RemovedAt != nil {
@@ -1092,7 +1093,7 @@ func (p *Plugin) handleAdminWGDeviceUpdate(c *gin.Context) {
 	if req.EgressHubID != nil {
 		eh, err := p.getWGHubByID(*req.EgressHubID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+			serverError(c, err)
 			return
 		}
 		if eh == nil {
@@ -1109,7 +1110,7 @@ func (p *Plugin) handleAdminWGDeviceUpdate(c *gin.Context) {
 		}
 	}
 	if err := p.updateWGDeviceEgressHub(id, req.EgressHubID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	dev, _ = p.getWGDeviceByID(id)
@@ -1124,7 +1125,7 @@ func (p *Plugin) handleAdminWGDeviceRemove(c *gin.Context) {
 	}
 	dev, err := p.getWGDeviceByID(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	if dev == nil {
@@ -1132,7 +1133,7 @@ func (p *Plugin) handleAdminWGDeviceRemove(c *gin.Context) {
 		return
 	}
 	if err := p.markWGDeviceRemoved(id, time.Now().UTC()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	// If this was the hub device, clear hub binding too — admin
@@ -1148,7 +1149,7 @@ func (p *Plugin) handleAdminWGDeviceRemove(c *gin.Context) {
 func (p *Plugin) handleAdminWGSiteList(c *gin.Context) {
 	sites, err := p.listWGSites()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"sites": sites})
@@ -1227,4 +1228,12 @@ func hubEndpointResolvesTo(host, ip string) bool {
 		}
 	}
 	return false
+}
+
+// serverError answers 500 and logs the underlying error with the route,
+// so a failing store call is diagnosable from /tmp/polar.wg-svc.log
+// instead of being swallowed behind a bare "server error".
+func serverError(c *gin.Context, err error) {
+	log.Printf("wg: %s %s: server error: %v", c.Request.Method, c.FullPath(), err)
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 }
