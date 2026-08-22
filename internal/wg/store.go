@@ -871,11 +871,15 @@ func (p *Plugin) getWGDeviceByTokenHash(hash string) (*WGDevice, error) {
 	return d, nil
 }
 
-func (p *Plugin) listWGDevices(includeRemoved bool) ([]WGDevice, error) {
-	q := `SELECT d.id, d.device_id, d.hub_id, d.site_id, d.d_index, d.device_ip, d.pubkey,
+// wgDeviceListSelect is the projection for listWGDevices; it must stay in
+// step with scanWGDevice(_, true) (see store_devicelist_test.go).
+const wgDeviceListSelect = `d.id, d.device_id, d.hub_id, d.site_id, d.d_index, d.device_ip, d.pubkey,
 	             d.hostname, d.os, d.arch, d.agent_ver, d.wg_listen_port, d.lan_addrs_json,
 	             d.wg_endpoint, d.token_hash, d.token_expires_at, d.created_at, d.last_seen_at,
-	             d.removed_at, d.host_id, d.egress_hub_id, s.slug, h.slug
+	             d.removed_at, d.host_id, d.egress_hub_id, d.isolated, s.slug, h.slug`
+
+func (p *Plugin) listWGDevices(includeRemoved bool) ([]WGDevice, error) {
+	q := `SELECT ` + wgDeviceListSelect + `
 	        FROM wg_devices d
 	   LEFT JOIN wg_sites s ON s.id = d.site_id
 	   LEFT JOIN wg_hubs  h ON h.id = d.hub_id`
