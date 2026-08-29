@@ -50,6 +50,33 @@ func TestRenderWGInstallScript(t *testing.T) {
 	}
 }
 
+// The installer must run on a stock macOS box with no Xcode Command Line
+// Tools, where /usr/bin/python3 is a stub that exits non-zero, and on
+// minimal Linux/FreeBSD images that ship no python at all. JSON is handled
+// by the embedded awk parser instead — keep it that way.
+func TestInstallScriptHasNoPythonDependency(t *testing.T) {
+	s, err := renderWGInstallScript(wgInstallScriptInput{Server: "https://example.test"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue // prose about why python is avoided is fine
+		}
+		for _, bad := range []string{"python3", "python ", "jq "} {
+			if strings.Contains(line, bad) {
+				t.Errorf("installer depends on %q, not guaranteed present: %s", bad, line)
+			}
+		}
+	}
+	// The awk JSON reader and its callers must survive.
+	for _, w := range []string{"JSON_AWK='", "jflat()", "jget()", "json_esc()"} {
+		if !strings.Contains(s, w) {
+			t.Errorf("rendered script missing %q", w)
+		}
+	}
+}
+
 func TestExtractPublicIP(t *testing.T) {
 	cases := []struct {
 		name             string
