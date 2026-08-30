@@ -205,9 +205,9 @@
                   发布 = 新增一条 link;取消发布 = 删除它。
                 </p>
                 <div style="display:flex; gap:6px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
-                  <select id="linkHubA" class="lp-input"></select>
+                  <select id="linkHubA" class="lp-input" aria-label="link 起点 hub"></select>
                   <span>↔</span>
-                  <select id="linkHubB" class="lp-input"></select>
+                  <select id="linkHubB" class="lp-input" aria-label="link 终点 hub"></select>
                   <button id="publishLinkBtn" class="btn-inline" type="button">发布 link</button>
                   <span id="linkPublishMsg" class="meta-subtitle"></span>
                 </div>
@@ -405,10 +405,10 @@
           <div id="tsBlock" class="settings-section-card" style="margin-top: 8px; border-color: var(--accent, #36c);" hidden>
             <div class="settings-section-title">🌐 Tailscale 客户端 (PreAuthKey)</div>
             <div style="display:flex; gap:6px; margin-top:4px;">
-              <input id="tsKeyValue" class="input" type="text" readonly style="font-family: ui-monospace, Menlo, monospace; font-size: 12px;" />
+              <input id="tsKeyValue" class="input" type="text" readonly style="font-family: ui-monospace, Menlo, monospace; font-size: 12px;"  aria-label="Tailscale PreAuthKey"/>
               <button id="tsKeyCopyBtn" type="button" class="btn-inline btn-secondary" aria-label="复制">📋</button>
             </div>
-            <textarea id="tsCmdValue" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px; margin-top: 6px;"></textarea>
+            <textarea id="tsCmdValue" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px; margin-top: 6px;" aria-label="Tailscale 安装命令"></textarea>
             <button id="tsCmdCopyBtn" type="button" class="btn-inline btn-secondary" style="margin-top:6px;">📋 复制 tailscale up 命令</button>
             <div class="meta-subtitle" style="margin-top:4px;">原版 Tailscale 客户端用这个 key 入网；wg-mac 客户端用上面那个 token。两边都可用。</div>
           </div>
