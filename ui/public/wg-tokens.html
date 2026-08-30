@@ -144,7 +144,7 @@
                 <span style="flex:1;"></span>
                 <button id="hubViewToggle" class="btn-inline btn-secondary" type="button">▤ 列表</button>
                 <button id="hubFsBtn" class="btn-inline btn-secondary" type="button">⛶ 全屏</button>
-                <button id="hubStatusRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
+                <button id="hubStatusRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
               </div>
               <div class="lp-preview-body">
                 <p class="meta-subtitle" style="margin: 0 0 12px 0;">
@@ -175,7 +175,7 @@
                 <span class="badge">Hub 列表</span>
                 <span id="hubsSummary" class="lp-mode-badge">—</span>
                 <span style="flex:1;"></span>
-                <button id="hubsRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
+                <button id="hubsRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
               </div>
               <div class="lp-preview-body">
                 <p class="meta-subtitle" style="margin: 0 0 12px 0;">
@@ -234,7 +234,7 @@
                 <label class="meta-subtitle" style="display:inline-flex; gap:4px; align-items:center;">
                   <input id="hideRevokedCheck" type="checkbox" checked /> 隐藏已撤销
                 </label>
-                <button id="tokensRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
+                <button id="tokensRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
                 <button id="newTokenBtn" class="btn-inline btn-primary" type="button">+ 新建 Token</button>
               </div>
               <div class="lp-preview-body">
@@ -265,7 +265,7 @@
                 <label class="meta-subtitle" style="display:inline-flex; gap:4px; align-items:center;">
                   <input id="includeRemovedCheck" type="checkbox" /> 显示已下线
                 </label>
-                <button id="devicesRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
+                <button id="devicesRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
               </div>
               <div class="lp-preview-body">
                 <table id="devicesTable" class="lp-table" hidden>
@@ -288,7 +288,7 @@
                 <span class="badge">wg-mac 安装包</span>
                 <span id="bundlesSummary" class="lp-mode-badge">—</span>
                 <span style="flex:1;"></span>
-                <button id="bundlesRefreshBtn" class="btn-inline btn-secondary" type="button">⟲</button>
+                <button id="bundlesRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
                 <button id="uploadBundleBtn" class="btn-inline btn-primary" type="button">⬆ 上传 bundle</button>
               </div>
               <div class="lp-preview-body">
@@ -312,10 +312,10 @@
 
     <!-- Create token modal -->
     <div id="createTokenModal" class="lp-modal" hidden>
-      <div class="lp-modal-card" style="max-width: 560px;">
+      <div class="lp-modal-card" style="max-width: 560px;" role="dialog" aria-modal="true" aria-labelledby="createTokenModalTitle">
         <div class="lp-modal-head">
-          <span class="lp-modal-title">新建入网 Token</span>
-          <button id="createTokenCloseBtn" type="button" class="lp-modal-close">✕</button>
+          <span class="lp-modal-title" id="createTokenModalTitle">新建入网 Token</span>
+          <button id="createTokenCloseBtn" type="button" class="lp-modal-close" aria-label="关闭">✕</button>
         </div>
         <div class="lp-modal-body">
           <div class="settings-section-card" style="margin-bottom: 8px;">
@@ -381,9 +381,9 @@
 
     <!-- Plaintext-shown-once modal -->
     <div id="plaintextModal" class="lp-modal" hidden>
-      <div class="lp-modal-card" style="max-width: 640px;">
+      <div class="lp-modal-card" style="max-width: 640px;" role="dialog" aria-modal="true" aria-labelledby="plaintextModalTitle">
         <div class="lp-modal-head">
-          <span class="lp-modal-title">✓ Token 已创建</span>
+          <span class="lp-modal-title" id="plaintextModalTitle">✓ Token 已创建</span>
         </div>
         <div class="lp-modal-body">
           <div class="wg-warn">⚠️ 这是 plaintext，只显示一次，关闭后无法找回 —— 请立刻复制保存。</div>
@@ -391,7 +391,7 @@
             <div class="settings-section-title">Bearer Token</div>
             <div style="display:flex; gap:6px; margin-top:4px;">
               <input id="plaintextValue" class="input" type="text" readonly style="font-family: ui-monospace, Menlo, monospace; font-size: 12px;" />
-              <button id="plaintextCopyBtn" type="button" class="btn-inline btn-secondary">📋</button>
+              <button id="plaintextCopyBtn" type="button" class="btn-inline btn-secondary" aria-label="复制">📋</button>
             </div>
           </div>
           <div class="settings-section-card">
@@ -406,7 +406,7 @@
             <div class="settings-section-title">🌐 Tailscale 客户端 (PreAuthKey)</div>
             <div style="display:flex; gap:6px; margin-top:4px;">
               <input id="tsKeyValue" class="input" type="text" readonly style="font-family: ui-monospace, Menlo, monospace; font-size: 12px;" />
-              <button id="tsKeyCopyBtn" type="button" class="btn-inline btn-secondary">📋</button>
+              <button id="tsKeyCopyBtn" type="button" class="btn-inline btn-secondary" aria-label="复制">📋</button>
             </div>
             <textarea id="tsCmdValue" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px; margin-top: 6px;"></textarea>
             <button id="tsCmdCopyBtn" type="button" class="btn-inline btn-secondary" style="margin-top:6px;">📋 复制 tailscale up 命令</button>
@@ -421,10 +421,10 @@
 
     <!-- Upload bundle modal -->
     <div id="uploadBundleModal" class="lp-modal" hidden>
-      <div class="lp-modal-card" style="max-width: 560px;">
+      <div class="lp-modal-card" style="max-width: 560px;" role="dialog" aria-modal="true" aria-labelledby="uploadBundleModalTitle">
         <div class="lp-modal-head">
-          <span class="lp-modal-title">上传 wg-mac Bundle</span>
-          <button id="uploadBundleCloseBtn" type="button" class="lp-modal-close">✕</button>
+          <span class="lp-modal-title" id="uploadBundleModalTitle">上传 wg-mac Bundle</span>
+          <button id="uploadBundleCloseBtn" type="button" class="lp-modal-close" aria-label="关闭">✕</button>
         </div>
         <div class="lp-modal-body">
           <div class="settings-section-card" style="margin-bottom: 8px;">
