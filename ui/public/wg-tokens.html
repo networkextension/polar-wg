@@ -390,13 +390,13 @@
           <div class="settings-section-card" style="margin-bottom: 8px;">
             <div class="settings-section-title">Bearer Token</div>
             <div style="display:flex; gap:6px; margin-top:4px;">
-              <input id="plaintextValue" class="input" type="text" readonly style="font-family: ui-monospace, Menlo, monospace; font-size: 12px;" />
+              <input id="plaintextValue" class="input" type="text" readonly style="font-family: ui-monospace, Menlo, monospace; font-size: 12px;"  aria-label="Bearer Token"/>
               <button id="plaintextCopyBtn" type="button" class="btn-inline btn-secondary" aria-label="复制">📋</button>
             </div>
           </div>
           <div class="settings-section-card">
             <div class="settings-section-title">wg-mac 一键安装命令</div>
-            <textarea id="plaintextInstallCmd" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px;"></textarea>
+            <textarea id="plaintextInstallCmd" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px;" aria-label="wg-mac 一键安装命令"></textarea>
             <button id="plaintextInstallCopyBtn" type="button" class="btn-inline btn-secondary" style="margin-top:6px;">📋 复制命令</button>
           </div>
           <!-- Phase 11 C3: only shown when WG_HEADSCALE_ENABLED=1 on the
