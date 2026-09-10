@@ -295,7 +295,11 @@ func (p *Plugin) buildPeerListResponse(dev *WGDevice, hub *WGHub) (*wgRegisterRe
 		// (full mesh among public-IP hubs). This puts the fabric into the
 		// hub's INITIAL conf at install time — the install script's
 		// renderer already handles endpoint + allowed_extra.
-		for _, e := range otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs) {
+		fabric := otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs)
+		// Same-segment / same-NAT hubs can't hairpin each other's public
+		// endpoint — hand out the LAN one. See hub_fabric_endpoint.go.
+		p.localizeFabricEndpoints(hub, allHubs, fabric)
+		for _, e := range fabric {
 			peerOut = append(peerOut, wgPeerResponse{
 				Pubkey:       e.Pubkey,
 				WGIP:         strings.TrimSuffix(e.WGIP, "/32"),
@@ -636,13 +640,20 @@ func (p *Plugin) handleWGHubPeers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	peers = append(peers, otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs)...)
+	fabric := otherConfiguredHubPeers(allHubs, hub.ID, hub.MeshCIDR, linkedHubIDs)
+	// Same-segment / same-NAT hubs can't hairpin each other's public endpoint —
+	// hand out the LAN one. See hub_fabric_endpoint.go.
+	p.localizeFabricEndpoints(hub, allHubs, fabric)
+	peers = append(peers, fabric...)
 	for _, h := range allHubs {
 		if h.ID != hub.ID && h.UpdatedAt.After(revTS) {
 			revTS = h.UpdatedAt
 		}
 	}
-	rev := strconv.FormatInt(revTS.UnixNano(), 10) + "-" + strconv.Itoa(len(peers))
+	// Fabric endpoints ride in rev: a peer hub's LAN IP can change without
+	// wg_hubs.updated_at moving, and the client only re-renders on rev change.
+	rev := strconv.FormatInt(revTS.UnixNano(), 10) + "-" + strconv.Itoa(len(peers)) +
+		"-" + strconv.FormatUint(uint64(fabricEndpointsFingerprint(fabric)), 16)
 	c.JSON(http.StatusOK, wgHubPeersResponse{
 		Peers:      peers,
 		Rev:        rev,
@@ -1200,14 +1211,29 @@ type hubResolveEntry struct {
 	at  time.Time
 }
 
-// hubEndpointResolvesTo: does hub host (name or literal) resolve to ip? DNS is
-// cached 5 minutes — /v1/peers is polled by every spoke.
+// hubEndpointResolvesTo: does hub host (name or literal) resolve to ip?
 func hubEndpointResolvesTo(host, ip string) bool {
 	if host == ip {
 		return true
 	}
+	for _, x := range resolveHostIPs(host) {
+		if x == ip {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveHostIPs resolves a host (name or literal IP) to its IPs. A literal
+// resolves to itself. DNS is cached 5 minutes — /v1/peers is polled by every
+// spoke. Shared with the hub↔hub fabric localizer (hub_fabric_endpoint.go).
+func resolveHostIPs(host string) []string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return nil
+	}
 	if net.ParseIP(host) != nil {
-		return false
+		return []string{host}
 	}
 	hubResolveCache.Lock()
 	e, ok := hubResolveCache.m[host]
@@ -1222,12 +1248,7 @@ func hubEndpointResolvesTo(host, ip string) bool {
 		hubResolveCache.m[host] = e
 		hubResolveCache.Unlock()
 	}
-	for _, x := range e.ips {
-		if x == ip {
-			return true
-		}
-	}
-	return false
+	return e.ips
 }
 
 // serverError answers 500 and logs the underlying error with the route,

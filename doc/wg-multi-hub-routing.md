@@ -158,6 +158,53 @@ P1 cross-hub 路由零 schema 改动。
   hub 带 🌍 角标(悬停列出路由,全隧道特别标注);hub tooltip 含 mesh + 出口。
   hub↔hub 互联线 PR#16 已有(P1 fabric peer 出现在 wg show 后自动显现)。
 
+## 同一网段 / 同一 NAT 下的多 hub
+
+两个 hub 落在**同一个 LAN 段**(或同一个出口 NAT)后面 —— 典型场景是一台机器一个 zone,
+zen `192.168.11.57` 与 everest `192.168.11.82` 各自当 hub。schema 早就支持(`wg_hubs`
+多行 + 互不重叠的 /24),要处理的是三件具体的事:
+
+### 1. 公网端口必须逐 hub 错开(运维,非代码)
+
+同一个 WAN IP 上,一个 UDP 端口只能转发给一台机器。**每个 hub 的
+`public_endpoint` 端口必须唯一**(zen 已占 `1632`,第二个 hub 用别的,如 `1633`),
+路由器上各自做端口转发。共用端口 = 第二个 hub 的异地 spoke 永远连不上。
+
+### 2. hub↔hub fabric 的 endpoint 本地化(已实现)
+
+`wg_hubs.endpoint` 存的是**公网**地址(异地 spoke / 异地 hub 要用),但同网段的两个
+hub 互拨公网地址会撞上 hairpin/NAT-loopback —— 家用路由器普遍不支持,握手永远
+`handshake: never`,跨 hub 的 /24 全部黑洞。
+
+修法与 spoke 侧一致:**endpoint 在下发时按对端位置替换**。spoke→自己 hub 这条早已由
+`hubEndpointFor()`(`handlers.go`)处理;hub→hub 这条由
+`localizeFabricEndpoints()`(`hub_fabric_endpoint.go`)补齐,`/v1/register` 的
+hub-self 分支与 `/v1/hub/peers` 两条路径都会走。判据(任一成立即替换成对方 hub 设备
+的 LAN endpoint):
+
+1. 两个 hub 的绑定设备**共享私网网段**(`lan_addrs_json` 归一化后有交集)—— 字面
+   意义上的同一网段;
+2. 两个 hub 的公网 endpoint **解析到同一个 IP** —— 同一个出口 NAT(可能跨 VLAN),
+   hairpin 同样打不通。
+
+拿不到对方的私网 endpoint 时不替换(保留公网,行为回到改动前)。`/v1/hub/peers` 的
+`rev` 折进了 fabric endpoint 指纹 —— 对端 hub 的 LAN IP 变了(DHCP)而
+`wg_hubs.updated_at` 没动时,客户端照样会重渲染 conf。**客户端零改动**:endpoint 是
+渲染器本来就读的字段。配套建议:同网段的 hub 机器做 DHCP 保留(与
+`doc/../home-lab` 同一条运维约定)。
+
+### 3. spoke 归属:同网段的机器尽量挂同一个 hub
+
+spoke 挂哪个 hub 由 token 的 `hub_id` 钉死(不做自动选举,见上文决策 1)。同网段的两台
+spoke 若分属两个 hub,它们**不是同一个 site**(site 按 `(公网IP, LAN 网段)` 在
+**hub 内**哈希),拿不到 LAN-direct 直连,流量得走
+`spokeA → hubA → (fabric) → hubB → spokeB`—— 在同一根网线上绕三跳。通,但没必要。
+所以:**同网段的机器归到同一个 hub**;多 hub 是给"多 zone 各自控制面"用的,不是给同一
+批机器分组用的。
+
+一台机器**同时**加入两个 mesh(dual-homed)是支持的:`hubIDsForHost` 会把它已经直连的
+那个 hub 的 /24 从 cross-hub 路由里摘掉,避免两个 wg 接口抢同一条 /24 路由。
+
 ## 不做(out of scope)
 
 - Hub 选举 / 自动 failover —— 明确不做,hub 挂了由运营商手动处理。
