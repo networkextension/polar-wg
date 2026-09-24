@@ -21,9 +21,11 @@
 #
 # Optional args:
 #   --hostname=NAME   override the registered hostname (default: hostname -s)
-#   --listen=PORT     wg UDP listen port (default: 51820)
+#   --listen=PORT     wg UDP listen port (default: 1632, matches the mesh)
 #   --iface=NAME      logical iface name (default: wgc0)
 #   --reinstall       re-register even if /etc/wgctl/<iface>.json exists
+#   --host-id=ID      polar-hosts host.id for the wg↔hosts cross-link
+#                     (auto-read from ~/.polar/agent.toml if omitted)
 
 set -euo pipefail
 
@@ -32,9 +34,14 @@ SERVER="__SERVER_PLACEHOLDER__"
 TOKEN=""
 HOSTNAME_OVERRIDE=""
 SITE_SLUG=""
-WG_LISTEN=51820
+# Mesh-wide UDP port. The control plane advertises each node's endpoint as
+# <ip>:<wg_listen>, so this MUST match what peers are told to dial — the macOS
+# join.sh uses 1632, so Linux nodes do too. A mismatch (e.g. the old 51820
+# default) means peers dial a port nothing listens on → handshake never lands.
+WG_LISTEN=1632
 IFACE="wgc0"
 REINSTALL=0
+HOST_ID=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,10 +52,24 @@ while [[ $# -gt 0 ]]; do
         --iface=*)    IFACE="${1#*=}";;
         --reinstall)  REINSTALL=1;;
         --server=*)   SERVER="${1#*=}";;
+        --host-id=*)  HOST_ID="${1#*=}";;
         *) echo "unknown arg: $1" >&2; exit 1;;
     esac
     shift
 done
+
+# host_id ties this wg device to its polar-hosts host row, lighting up the
+# bidirectional wg_devices↔hosts cross-link at register time (vs the fragile
+# hello-backfill that needs the agent to read+match the same wg pubkey). If
+# not passed explicitly, read it from the local polar-agent config when present
+# — most wg nodes also run polar-agent, which wrote host_id there at enroll.
+if [[ -z "$HOST_ID" ]]; then
+    for cfg in "$HOME/.polar/agent.toml" /root/.polar/agent.toml /home/*/.polar/agent.toml; do
+        [[ -r "$cfg" ]] || continue
+        HOST_ID=$(sed -n 's/^[[:space:]]*host_id[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$cfg" | head -1)
+        [[ -n "$HOST_ID" ]] && { echo "==> using host_id from $cfg"; break; }
+    done
+fi
 
 [[ $EUID -eq 0 ]] || { echo "must run as root (use sudo)" >&2; exit 1; }
 [[ -n "$TOKEN" ]] || { echo "--token=<TOKEN> required" >&2; exit 1; }
@@ -94,6 +115,7 @@ STATE_FILE="$STATE_DIR/$IFACE.json"
 CONF="/etc/wireguard/$IFACE.conf"
 RENDER_HELPER=/usr/local/sbin/wgctl-render-linux
 REFRESH_HELPER=/usr/local/sbin/wgctl-refresh-linux
+HB_HELPER=/usr/local/sbin/wgctl-hb-linux
 
 # Honor existing install unless --reinstall. Per-iface, so a second iface
 # joins cleanly without touching the first (unlike macOS join.sh).
@@ -154,9 +176,10 @@ esac
 echo "==> registering with control plane $SERVER"
 REQ_JSON=$(TOKEN="$TOKEN" PUB="$PUB" HOSTNAME_REPORT="$HOSTNAME_REPORT" \
     ARCH="$ARCH" LAN="$LAN_ADDRS_JSON" WG_LISTEN="$WG_LISTEN" SITE_SLUG="$SITE_SLUG" \
+    HOST_ID="$HOST_ID" \
     python3 <<'PY'
 import json, os
-print(json.dumps({
+body = {
     "token":     os.environ["TOKEN"],
     "pubkey":    os.environ["PUB"],
     "hostname":  os.environ["HOSTNAME_REPORT"],
@@ -166,7 +189,11 @@ print(json.dumps({
     "lan_addrs": json.loads(os.environ["LAN"]),
     "wg_listen": int(os.environ["WG_LISTEN"]),
     "site_slug": os.environ["SITE_SLUG"],
-}))
+}
+hid = os.environ.get("HOST_ID", "").strip()
+if hid:
+    body["host_id"] = hid  # cross-link to polar-hosts; server stamps wg_devices.host_id
+print(json.dumps(body))
 PY
 )
 
@@ -206,18 +233,25 @@ lines = [
     "",
 ]
 for p in resp.get("peers", []):
-    extras = p.get("allowed_extra", []) or []
-    aips = ([p["wg_ip"] + "/32"] if p.get("wg_ip") else []) + extras
+    # wg_ip arrives bare from /v1/peers ("10.88.5.3") but prefixed from
+    # /v1/hub/peers ("10.88.1.2/32") — normalize to a single /32 host route.
+    wg_ip = p.get("wg_ip")
+    host = (wg_ip if "/" in wg_ip else wg_ip + "/32") if wg_ip else ""
+    aips = ([host] if host else []) + (p.get("allowed_extra") or [])
     if not aips:
         continue
-    lines += [
-        "[Peer]",
-        f"PublicKey  = {p['pubkey']}",
-        f"Endpoint   = {p['endpoint']}",
-        f"AllowedIPs = {', '.join(aips)}",
-        f"PersistentKeepalive = {ka}",
-        "",
-    ]
+    block = ["[Peer]", f"PublicKey  = {p['pubkey']}"]
+    # Roaming spokes (the hub's /v1/hub/peers view) carry no endpoint: the hub
+    # only responds, it never dials them, so emit neither Endpoint nor
+    # keepalive. Peers we DO dial (hub, LAN-direct) carry one → add both.
+    ep = p.get("endpoint")
+    if ep:
+        block.append(f"Endpoint   = {ep}")
+    block.append(f"AllowedIPs = {', '.join(aips)}")
+    if ep:
+        block.append(f"PersistentKeepalive = {ka}")
+    block.append("")
+    lines += block
 
 conf = f"/etc/wireguard/{iface}.conf"
 d = os.path.dirname(conf)
@@ -229,6 +263,147 @@ os.chmod(tmp, 0o600)
 os.replace(tmp, conf)
 RENDER
 chmod 0755 "$RENDER_HELPER"
+
+# Heartbeat body builder — prints the /v1/heartbeat JSON for <iface>, built
+# from `wg show <iface> dump` + host facts. Mirrors the macOS wgctl-agent
+# status block (doc/hub-status.md): for a hub the per-peer roster is the
+# authoritative "who's online" view of the whole mesh.
+cat > "$HB_HELPER" <<'HB'
+#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+
+iface = sys.argv[1]
+try:
+    state = json.load(open(f"/etc/wgctl/{iface}.json"))
+except Exception:
+    state = {}
+role      = state.get("role", "device")
+wg_listen = int(state.get("listen", 0) or 0)
+
+def run(*a):
+    try:
+        return subprocess.run(a, capture_output=True, text=True, timeout=8).stdout
+    except Exception:
+        return ""
+
+# `wg show <iface> dump` is TAB-separated:
+#   line 0: privkey  pubkey  listen-port  fwmark            (interface)
+#   line N: pubkey  psk  endpoint  allowed-ips  hs  rx  tx  keepalive  (peer)
+now   = int(time.time())
+dump  = run("wg", "show", iface, "dump").splitlines()
+iface_up = bool(dump)
+peers = []
+for ln in dump[1:]:
+    f = ln.split("\t")
+    if len(f) < 8:
+        continue
+    pub, _psk, endpoint, aips, hs, rx, tx, _ka = f[:8]
+    hs   = int(hs or 0)
+    last = (now - hs) if hs else None
+    wg_ip = ""
+    for a in aips.split(","):
+        a = a.strip()
+        if a and a not in ("(none)", "none"):
+            wg_ip = a.split("/")[0]; break
+    peers.append({
+        "pubkey": pub,
+        "wg_ip": wg_ip,
+        "endpoint": None if endpoint in ("(none)", "") else endpoint,
+        "last_handshake_sec": last,
+        "rx_bytes": int(rx or 0),
+        "tx_bytes": int(tx or 0),
+        "online": last is not None and last < 180,
+    })
+
+# lan_addrs — skip loopback / link-local / mesh ranges.
+lan = []
+for ln in run("ip", "-o", "-4", "addr", "show", "scope", "global").splitlines():
+    p = ln.split()
+    if len(p) < 4 or p[2] != "inet":
+        continue
+    dev, cidr = p[1], p[3]
+    if dev.startswith("wg"):
+        continue
+    if cidr.split("/")[0].startswith(("127.", "169.254.", "10.88.", "100.64.")):
+        continue
+    lan.append({"iface": dev, "cidr": cidr})
+
+# Public egress IP for wg_endpoint.
+#
+# This used to take the default route NIC's own address, which behind NAT is an
+# RFC1918 address and never the egress IP — so an egress change was invisible to
+# the control plane. Ask an external echo service instead, cached: ifconfig.co
+# allows ~1 request/min per source IP and every device behind one NAT shares
+# that budget. On total failure keep serving the last known address (stale beats
+# nothing) but back-date the stamp so the retry comes sooner than a full TTL.
+# File format matches the shell agents so all three can share the cache.
+PUBIP_CACHE = "/etc/wgctl/public_ip"
+PUBIP_TTL   = int(os.environ.get("WGCTL_PUBIP_TTL", "900"))
+PUBIP_RETRY = int(os.environ.get("WGCTL_PUBIP_RETRY", "120"))
+PUBIP_URLS  = os.environ.get(
+    "WGCTL_PUBIP_URLS", "https://ifconfig.co/ip https://ifconfig.me/ip").split()
+
+def _is_ipv4(s):
+    p = s.split(".")
+    return len(p) == 4 and all(q.isdigit() and 0 <= int(q) <= 255 for q in p)
+
+def _write_pubip(stamp, ip):
+    try:
+        with open(PUBIP_CACHE + ".tmp", "w") as f:
+            f.write("%d %s\n" % (stamp, ip))
+        os.replace(PUBIP_CACHE + ".tmp", PUBIP_CACHE)
+    except Exception:
+        pass
+
+def public_ip():
+    now, stamp, cached = int(time.time()), 0, ""
+    try:
+        parts = open(PUBIP_CACHE).read().split()
+        stamp, cached = int(parts[0]), (parts[1] if len(parts) > 1 else "")
+    except Exception:
+        pass
+    if cached and now - stamp < PUBIP_TTL:
+        return cached
+    for url in PUBIP_URLS:
+        ip = run("curl", "-4", "-fsS", "--noproxy", "*",
+                 "--connect-timeout", "3", "--max-time", "5", url).strip()
+        if _is_ipv4(ip):
+            _write_pubip(now, ip)
+            return ip
+    _write_pubip(now - PUBIP_TTL + PUBIP_RETRY, cached)
+    return cached
+
+pub_ip = public_ip()
+
+try:
+    uptime = int(float(open("/proc/uptime").read().split()[0]))
+except Exception:
+    uptime = None
+arch = run("uname", "-m").strip()
+arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(arch, arch)
+
+ages = [p["last_handshake_sec"] for p in peers if p["last_handshake_sec"] is not None]
+stats = {
+    "rx_bytes": sum(p["rx_bytes"] for p in peers),
+    "tx_bytes": sum(p["tx_bytes"] for p in peers),
+    "last_handshake_sec": min(ages) if ages else 0,
+}
+status = {
+    "schema": 1, "role": role, "os": "linux", "arch": arch,
+    "agent_ver": "join-linux", "iface": iface, "iface_up": iface_up,
+    "uptime_sec": uptime, "wg_listen": wg_listen,
+    "peer_count": len(peers),
+    "peers_online": sum(1 for p in peers if p["online"]),
+    "peers": peers,
+}
+print(json.dumps({
+    "lan_addrs":   lan,
+    "wg_endpoint": f"{pub_ip}:{wg_listen}" if pub_ip and wg_listen else "",
+    "stats":       stats,
+    "status":      status,
+}))
+HB
+chmod 0755 "$HB_HELPER"
 
 cat > "$REFRESH_HELPER" <<REFRESH
 #!/bin/bash
@@ -255,20 +430,22 @@ case "\$ROLE" in
     *)   PEER_URL="\$SERVER/v1/peers" ;;
 esac
 
-# Best-effort heartbeat so the node shows online + last-seen in admin (the macOS
-# agent already does this; Linux didn't). Minimal body; any failure is ignored —
-# the peer refresh below is the part that matters.
-DEF_IF=\$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i=="dev"){print \$(i+1); exit}}')
-PUB_IP=\$(ip -o -4 addr show "\$DEF_IF" 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -1)
-WG_LISTEN=\$(read_field listen)
+# Heartbeat: full status block (lan_addrs + per-peer roster + transfer stats),
+# built by the hb helper from \`wg show <iface> dump\`. For a hub this roster is
+# the authoritative whole-mesh "who's online" view (doc/hub-status.md). Any
+# failure is ignored — the peer refresh below is the part that matters.
+HB_BODY=\$($HB_HELPER "\$IFACE" 2>/dev/null || echo '{}')
 curl -fsS --max-time 8 -X POST "\$SERVER/v1/heartbeat" \\
     -H "Authorization: Bearer \$TOKEN" -H "X-Device-Id: \$DEVICE_ID" \\
-    -H 'Content-Type: application/json' \\
-    -d "{\\"lan_addrs\\":[],\\"wg_endpoint\\":\\"\${PUB_IP}:\${WG_LISTEN}\\"}" \\
+    -H 'Content-Type: application/json' -d "\$HB_BODY" \\
     >/dev/null 2>&1 || true
 
 HTTP=\$(mktemp)
-CODE=\$(curl -fsS -o "\$HTTP" -w '%{http_code}' \\
+# -sS, NOT -fsS: with -f curl exits 22 on a 401 while still printing
+# %{http_code}, so the || echo 000 appended a second line and \$CODE became
+# "401\\n000" — matching neither branch, which made the eviction below dead
+# code and pinned the agent to "keeping current conf" forever.
+CODE=\$(curl -sS -o "\$HTTP" -w '%{http_code}' \\
     -H "Authorization: Bearer \$TOKEN" -H "X-Device-Id: \$DEVICE_ID" \\
     "\$PEER_URL" || echo 000)
 
@@ -339,11 +516,12 @@ if [[ "$ROLE" == "hub" ]]; then
     echo "==> hub role: enabling net.ipv4.ip_forward"
     echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wg-hub.conf
     sysctl -p /etc/sysctl.d/99-wg-hub.conf >/dev/null || true
-    # NAT for spoke internet egress via this hub (optional — set EGRESS_IF):
-    #   EGRESS_IF=eth0
-    #   MESH_CIDR=$(echo "$RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("mesh_cidr","100.64.0.0/24"))')
-    #   iptables -t nat -C POSTROUTING -s "$MESH_CIDR" -o "$EGRESS_IF" -j MASQUERADE 2>/dev/null || \
-    #     iptables -t nat -A POSTROUTING -s "$MESH_CIDR" -o "$EGRESS_IF" -j MASQUERADE
+    # Egress NAT (spokes exit to the internet / a datacenter subnet via this
+    # hub) is now SEMI-AUTOMATIC: the platform opens egress by setting this
+    # hub's advertised_routes, the server mirrors them in /v1/hub/peers, and
+    # the refresh agent (wg-agent) stands up the MASQUERADE rule on the next
+    # poll (and tears it down when egress is closed). Nothing to do at join;
+    # see apply_egress_nat in skills/wg-mac-install/scripts/wg-agent.sh.
 fi
 
 # ── systemd: bring up the iface + install the refresh timer ──────────────────

@@ -9,7 +9,7 @@ package wg
 //   POST /v1/heartbeat        Bearer device-token + X-Device-Id
 //   POST /v1/leave            Bearer device-token + X-Device-Id (hub → also clears wg_hup.pubkey)
 //   POST /v1/token/refresh    Bearer device-token + X-Device-Id
-//   GET  /v1/install          unauthenticated
+//   GET  /v1/install          unauthenticated (?os=linux → join-linux.sh)
 //   GET  /v1/install/:version unauthenticated
 //   GET  /v1/bundle           unauthenticated
 //   GET  /v1/bundle/:version  unauthenticated
@@ -749,6 +749,18 @@ func (p *Plugin) handleWGTokenRefresh(c *gin.Context) {
 // ---- /v1/install (+ /:version) ----
 
 func (p *Plugin) handleWGInstallScript(c *gin.Context) {
+	// Linux joins with in-kernel WireGuard (join-linux.sh), not a bundle.
+	if normWGOS(c.Query("os")) == "linux" {
+		script, err := renderWGJoinLinuxScript(wgServerBaseURL(c))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "render: " + err.Error()})
+			return
+		}
+		c.Header("Content-Type", "text/x-shellscript; charset=utf-8")
+		c.Header("Cache-Control", "no-store")
+		c.String(http.StatusOK, script)
+		return
+	}
 	// Target platform: ?os=&arch= pre-targets a specific bundle (e.g. for
 	// cross-platform packaging). When omitted the script auto-detects via uname
 	// at run time. OS defaults to darwin for back-compat.

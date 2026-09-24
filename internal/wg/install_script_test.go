@@ -228,3 +228,47 @@ func TestHubWGIPFromCIDR(t *testing.T) {
 		t.Errorf("custom /24: got %q err %v", got, err)
 	}
 }
+
+func TestRenderWGJoinLinuxScript(t *testing.T) {
+	s, err := renderWGJoinLinuxScript("https://wg.example:2443")
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, w := range []string{
+		"#!/bin/bash",
+		`SERVER="https://wg.example:2443"`,
+		"wg-quick",
+		"WG_LISTEN=1632",
+		"/v1/register",
+	} {
+		if !strings.Contains(s, w) {
+			t.Errorf("join-linux script missing %q", w)
+		}
+	}
+	if strings.Contains(s, joinLinuxServerDefault) {
+		t.Errorf("server placeholder not replaced")
+	}
+	if _, err := renderWGJoinLinuxScript(""); err == nil {
+		t.Errorf("expected error on empty server URL")
+	}
+}
+
+// The un-pinned script hands Linux hosts off to ?os=linux at run time; a
+// script pinned to an OS must not.
+func TestRenderWGInstallScriptLinuxHandoff(t *testing.T) {
+	s, err := renderWGInstallScript(wgInstallScriptInput{Server: "https://wg.example"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(s, `if [[ -z '' && "$(uname -s)" == Linux ]]`) ||
+		!strings.Contains(s, `curl -fsSL "$SERVER/v1/install?os=linux" | bash -s -- "$@"`) {
+		t.Errorf("un-pinned script missing Linux handoff")
+	}
+	s, err = renderWGInstallScript(wgInstallScriptInput{Server: "https://wg.example", OS: "darwin"})
+	if err != nil {
+		t.Fatalf("render pinned: %v", err)
+	}
+	if !strings.Contains(s, `if [[ -z 'darwin' && `) {
+		t.Errorf("pinned script should disable the Linux handoff")
+	}
+}

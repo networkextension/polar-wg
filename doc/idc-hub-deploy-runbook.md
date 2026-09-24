@@ -2,7 +2,7 @@
 
 Target: bring hub **id=4 `124.221.22.9`** (mesh 100.64.0.1, token label "idc") into
 the mesh + connect spoke(s). The `s_index` 500 is already fixed in prod; the
-`join-linux.sh` here has the hub-aware refresh + ip_forward fix (polar-wg-app PR #21).
+`join-linux.sh` (now `internal/wg/join-linux.sh`, served at `/v1/install?os=linux`) has the hub-aware refresh + ip_forward fix (polar-wg-app PR #21).
 
 Hub token:  `<HUB_TOKEN>`  (role=hub, unconsumed+live)
 Server:     `https://wg.4950.store:2443`
@@ -39,7 +39,7 @@ If endpoint blank/wrong → PATCH it via admin (spokes need it to dial in).
 ## 3. Bring up spoke(s)
 - Mint a **device-role** token per spoke in /wg-tokens.html (role=device, hub=124.221.22.9).
 - On each spoke:
-  - Linux: `sudo bash join-linux.sh --token=<DEV_TOKEN> --server=https://wg.4950.store:2443`
+  - Linux: `curl -sSL https://wg.4950.store:2443/v1/install | sudo bash -s -- --token=<DEV_TOKEN>`
   - macOS: `sudo bash join.sh --token=<DEV_TOKEN> --server=https://wg.4950.store:2443`
 - Test both directions:
   - from spoke: `ping 100.64.0.1`        (the hub)
