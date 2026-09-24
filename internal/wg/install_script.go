@@ -13,10 +13,34 @@ package wg
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
 	"strings"
 	"text/template"
 )
+
+// joinLinuxScript is the Linux installer served by /v1/install?os=linux.
+// Linux ships WireGuard in the kernel, so there is no bundle: the script
+// drives stock wireguard-tools + systemd (see the file header). Its SERVER
+// default is a placeholder that renderWGJoinLinuxScript bakes in, so the
+// one-liner needs only --token.
+//
+//go:embed join-linux.sh
+var joinLinuxScript string
+
+// Only the default assignment is rewritten; the script's own
+// "SERVER not set" guard compares against the bare placeholder.
+const joinLinuxServerDefault = `SERVER="__SERVER_PLACEHOLDER__"`
+
+func renderWGJoinLinuxScript(server string) (string, error) {
+	if strings.TrimSpace(server) == "" {
+		return "", fmt.Errorf("server URL required")
+	}
+	if !strings.Contains(joinLinuxScript, joinLinuxServerDefault) {
+		return "", fmt.Errorf("join-linux.sh lost its %s line", joinLinuxServerDefault)
+	}
+	return strings.Replace(joinLinuxScript, joinLinuxServerDefault, `SERVER="`+server+`"`, 1), nil
+}
 
 type wgInstallScriptInput struct {
 	Server        string
@@ -34,6 +58,15 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "must run as root"; exit 1; }
 
 SERVER='{{.Server}}'
+
+# Linux has no wg_core bundle — it runs in-kernel WireGuard via join-linux.sh.
+# An un-pinned request (plain "curl .../v1/install | sudo bash") can't tell
+# the OS from curl's User-Agent, so hand off here at run time.
+if [[ -z '{{.OS}}' && "$(uname -s)" == Linux ]]; then
+  echo "==> Linux host: switching to $SERVER/v1/install?os=linux"
+  curl -fsSL "$SERVER/v1/install?os=linux" | bash -s -- "$@"
+  exit $?
+fi
 BUNDLE_VERSION='{{.BundleVersion}}'
 MESH_CIDR='{{.MeshCIDR}}'
 # Pinned target platform (baked by /v1/install?os=&arch=); empty = auto-detect.
