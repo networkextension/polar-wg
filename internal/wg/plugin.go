@@ -120,6 +120,10 @@ func New(ctx context.Context, cfg Config) (*Plugin, error) {
 	}
 	// ensure wg_bundles.asset_id exists (the table predates the assets
 	// catalog). Non-fatal, but downloads need it — bundles serve from assets.
+	if err := p.ensureHubHeartbeatColumns(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ensure hub heartbeat status columns: %w", err)
+	}
 	if err := p.ensureBundleAssetColumn(); err != nil {
 		log.Printf("wg: ensure asset_id column: %v", err)
 	}

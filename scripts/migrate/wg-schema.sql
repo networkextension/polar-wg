@@ -188,3 +188,7 @@ CREATE INDEX IF NOT EXISTS ix_wg_heartbeats_device_ts
 -- → 500 from /v1/register. Drop the global constraint, re-scope to (hub_id, s_index).
 ALTER TABLE wg_sites DROP CONSTRAINT IF EXISTS wg_sites_s_index_key;
 CREATE UNIQUE INDEX IF NOT EXISTS wg_sites_hub_sindex_uq ON wg_sites(hub_id, s_index);
+
+-- Latest authenticated native-hub heartbeat sample; survives wg-svc restarts.
+ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS last_status_json JSONB;
+ALTER TABLE wg_devices ADD COLUMN IF NOT EXISTS last_status_at TIMESTAMPTZ;

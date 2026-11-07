@@ -226,9 +226,9 @@ function peerLabel(pubkey?: string): string {
   return `<strong>${esc(name)}</strong> <code title="${esc(pubkey)}" style="opacity:0.6; font-size:11px;">${trunc}</code>`;
 }
 
-function renderPeerRow(p: WGHubPeerSample): string {
+function renderPeerRow(p: WGHubPeerSample, rosterOnly = false): string {
   const handshakeCls = handshakeClass(p.handshake_age_sec);
-  const handshakeAge = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
+  const handshakeAge = rosterOnly ? "unknown" : p.handshake_age_sec == null ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
   return `
     <tr>
       <td>${peerLabel(p.public_key)}</td>
@@ -318,12 +318,14 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
   } else {
     const s = row.status;
     const peers = s.peers ?? [];
-    const ageMs = Date.now() - new Date(s.recorded_at).getTime();
-    const ageStr = Number.isFinite(ageMs) ? fmtAgeSec(Math.floor(ageMs / 1000)) : "?";
+    const rosterOnly = s.extra?.source === "roster";
+    const recordedMs = new Date(s.recorded_at).getTime();
+    const hasSample = !rosterOnly && Number.isFinite(recordedMs) && recordedMs > 0;
+    const sampleLabel = hasSample ? `sample ${fmtAgeSec(Math.max(0, Math.floor((Date.now() - recordedMs) / 1000)))} ago` : "no sample yet (registered roster)";
     const staleBadge = s.stale ? ` · <span class="wg-status-stale-banner">stale</span>` : "";
     statusHtml = `
       <div class="wg-status-card-status">
-        ${s.peer_count} peers · iface <code>${esc(s.iface)}</code> · sample ${ageStr} ago${staleBadge}
+        ${s.peer_count} peers · iface <code>${esc(s.iface)}</code> · ${sampleLabel}${staleBadge}
       </div>
     `;
     if (peers.length > 0) {
@@ -341,7 +343,7 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
             </tr>
           </thead>
           <tbody>
-            ${peers.map(renderPeerRow).join("")}
+            ${peers.map((peer) => renderPeerRow(peer, rosterOnly)).join("")}
           </tbody>
         </table>
       `;

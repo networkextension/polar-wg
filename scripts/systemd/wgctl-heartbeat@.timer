@@ -1,0 +1,9 @@
+[Unit]
+Description=Sample WireGuard hub status every 30 seconds for %i
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=wgctl-heartbeat@%i.service
+[Install]
+WantedBy=timers.target

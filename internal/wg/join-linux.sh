@@ -308,6 +308,9 @@ for ln in dump[1:]:
     peers.append({
         "pubkey": pub,
         "wg_ip": wg_ip,
+
+        "allowed_ips": aips,
+        "keepalive_sec": int(_ka or 0),
         "endpoint": None if endpoint in ("(none)", "") else endpoint,
         "last_handshake_sec": last,
         "rx_bytes": int(rx or 0),
