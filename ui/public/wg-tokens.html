@@ -54,6 +54,8 @@
       /* 单元格 nowrap：挤压时 CJK 会逐字竖排、按钮纵向堆叠，行高爆炸到一屏
          只显示 4 台设备；nowrap 后行高恢复单行，宽度交给上面的横向滚动。 */
       .lp-table th, .lp-table td { white-space: nowrap; }
+      .wg-device-name { display: inline-flex; align-items: center; }
+      .wg-device-name .meta-subtitle { margin-left: 6px; }
       /* 表格行内的 .btn-inline（含出口 select）用的是页面级 CTA 的
          12px/16px 大内边距 —— 行内场景收紧到与文字等高。 */
       .lp-table .btn-inline, .lp-table select.btn-inline {
@@ -105,14 +107,16 @@
           <!-- Hub Status tab — live from dock cache (PR #345). -->
           <section id="paneStatus" class="lp-pane">
             <style>
-              .wg-status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 12px; }
-              .wg-status-card { border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 10px 12px; background: var(--card-bg, transparent); }
+              .wg-status-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+              .wg-status-grid[hidden] { display: none; }
+              .wg-status-card { min-width: 0; box-sizing: border-box; border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 10px 12px; background: var(--card-bg, transparent); overflow-wrap: anywhere; }
               .wg-status-card-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
               .wg-status-card-title { font-weight: 600; }
               .wg-status-card-meta { display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }
               .wg-status-card-status { margin-top:6px; }
               .wg-status-card-status.dim { opacity: 0.6; }
               .wg-status-toggle { background:none; border:0; padding:0; color: var(--accent, #36c); cursor:pointer; font-size:12px; }
+              .wg-status-peer-scroll { max-width: 100%; overflow-x: auto; }
               .wg-status-peer-table { width:100%; border-collapse: collapse; margin-top:8px; font-size: 12px; }
               .wg-status-peer-table th, .wg-status-peer-table td { text-align:left; padding: 4px 6px; border-bottom: 1px solid var(--border-subtle, #eee); white-space: nowrap; }
               .wg-status-handshake-fresh { color: #2a8a2a; }
@@ -142,6 +146,12 @@
                 <span class="badge">Hub 实时状态</span>
                 <span id="hubStatusSummary" class="lp-mode-badge">—</span>
                 <span style="flex:1;"></span>
+                <label class="meta-subtitle" style="display:inline-flex; gap:4px; align-items:center;">
+                  Hub
+                  <select id="statusHubFilter" class="lp-input" style="width:auto;">
+                    <option value="">全部 Hub</option>
+                  </select>
+                </label>
                 <button id="hubViewToggle" class="btn-inline btn-secondary" type="button">▤ 列表</button>
                 <button id="hubFsBtn" class="btn-inline btn-secondary" type="button">⛶ 全屏</button>
                 <button id="hubStatusRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
@@ -263,6 +273,12 @@
                 <span id="devicesSummary" class="lp-mode-badge">—</span>
                 <span style="flex:1;"></span>
                 <label class="meta-subtitle" style="display:inline-flex; gap:4px; align-items:center;">
+                  Hub
+                  <select id="devicesHubFilter" class="lp-input" style="width:auto;">
+                    <option value="">全部 Hub</option>
+                  </select>
+                </label>
+                <label class="meta-subtitle" style="display:inline-flex; gap:4px; align-items:center;">
                   <input id="includeRemovedCheck" type="checkbox" /> 显示已下线
                 </label>
                 <button id="devicesRefreshBtn" class="btn-inline btn-secondary" type="button" aria-label="刷新">⟲</button>
@@ -271,7 +287,7 @@
                 <table id="devicesTable" class="lp-table" hidden>
                   <thead>
                     <tr>
-                      <th>设备 ID</th><th>Hostname</th><th>Hub</th><th>站点</th><th>wg IP</th><th>Endpoint</th><th>Agent</th><th>最近心跳</th><th>状态</th><th>出口</th><th></th>
+                      <th>Hostname</th><th>出口</th><th>Hub</th><th>站点</th><th>wg IP</th><th>Endpoint</th><th>Agent</th><th>最近心跳</th><th></th>
                     </tr>
                   </thead>
                   <tbody id="devicesTbody"></tbody>
@@ -453,6 +469,6 @@
       </div>
     </div>
 
-    <script type="module" src="/scripts/wg-tokens.js"></script>
+    <script type="module" src="/scripts/wg-tokens.js?v=20261107-status-list"></script>
   </body>
 </html>
