@@ -127,6 +127,9 @@ const hubTopology = byId<HTMLElement>("hubTopology");
 const hubTopologyWrap = byId<HTMLElement>("hubTopologyWrap");
 const hubViewToggle = byId<HTMLButtonElement>("hubViewToggle");
 const hubFsBtn = byId<HTMLButtonElement>("hubFsBtn");
+const statusHubFilter = byId<HTMLSelectElement>("statusHubFilter");
+let statusCache: WGHubStatusRow[] = [];
+let statusFilterInitialized = false;
 // Star-topology is the default view; the toggle flips to the legacy card list.
 let topoView = true;
 
@@ -226,9 +229,9 @@ function peerLabel(pubkey?: string): string {
   return `<strong>${esc(name)}</strong> <code title="${esc(pubkey)}" style="opacity:0.6; font-size:11px;">${trunc}</code>`;
 }
 
-function renderPeerRow(p: WGHubPeerSample): string {
+function renderPeerRow(p: WGHubPeerSample, rosterOnly = false): string {
   const handshakeCls = handshakeClass(p.handshake_age_sec);
-  const handshakeAge = p.handshake_age_sec === undefined ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
+  const handshakeAge = rosterOnly ? "unknown" : p.handshake_age_sec == null ? "never" : `${fmtAgeSec(p.handshake_age_sec)} ago`;
   return `
     <tr>
       <td>${peerLabel(p.public_key)}</td>
@@ -302,10 +305,19 @@ function renderIfaceNetRow(info?: WGHubIfaceNet): string {
   `;
 }
 
+function renderStatusDot(state: "unknown" | "online" | "pending" | "offline", label: string): string {
+  const colors = {
+    unknown: "#94a3b8", online: "#22c55e", pending: "#eab308", offline: "#ef4444",
+  };
+  return `<svg width="7" height="7" viewBox="0 0 8 8" style="display:inline-block;flex:none;vertical-align:middle;margin-right:6px;" role="img" aria-label="${esc(label)}"><title>${esc(label)}</title><circle cx="4" cy="4" r="3.5" fill="${colors[state]}" /></svg>`;
+}
+
 function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
   const card = document.createElement("div");
   card.className = "wg-status-card";
-  const headTitle = `<span class="wg-status-card-title">${esc(row.label || row.slug)}</span>`;
+  const state = !row.status ? "unknown" : row.status.stale ? "offline" : "online";
+  const stateLabel = !row.status ? "尚未上报" : row.status.stale ? "上报已过期" : "上报正常";
+  const headTitle = `<span class="wg-status-card-title">${renderStatusDot(state, stateLabel)}${esc(row.label || row.slug)}</span>`;
   const headSlug = `<code>${esc(row.slug)}</code>`;
   const headEndpoint = row.endpoint ? `<code>${esc(row.endpoint)}</code>` : "";
   const headIP = row.wg_ip ? `<code>${esc(row.wg_ip)}</code>` : "";
@@ -318,16 +330,19 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
   } else {
     const s = row.status;
     const peers = s.peers ?? [];
-    const ageMs = Date.now() - new Date(s.recorded_at).getTime();
-    const ageStr = Number.isFinite(ageMs) ? fmtAgeSec(Math.floor(ageMs / 1000)) : "?";
+    const rosterOnly = s.extra?.source === "roster";
+    const recordedMs = new Date(s.recorded_at).getTime();
+    const hasSample = !rosterOnly && Number.isFinite(recordedMs) && recordedMs > 0;
+    const sampleLabel = hasSample ? `sample ${fmtAgeSec(Math.max(0, Math.floor((Date.now() - recordedMs) / 1000)))} ago` : "no sample yet (registered roster)";
     const staleBadge = s.stale ? ` · <span class="wg-status-stale-banner">stale</span>` : "";
     statusHtml = `
       <div class="wg-status-card-status">
-        ${s.peer_count} peers · iface <code>${esc(s.iface)}</code> · sample ${ageStr} ago${staleBadge}
+        ${s.peer_count} peers · iface <code>${esc(s.iface)}</code> · ${sampleLabel}${staleBadge}
       </div>
     `;
     if (peers.length > 0) {
       peerTableHtml = `
+        <div class="wg-status-peer-scroll" role="region" aria-label="${esc(row.label || row.slug)} peers" tabindex="0">
         <table class="wg-status-peer-table">
           <thead>
             <tr>
@@ -341,9 +356,10 @@ function renderHubCard(row: WGHubStatusRow): HTMLDivElement {
             </tr>
           </thead>
           <tbody>
-            ${peers.map(renderPeerRow).join("")}
+            ${peers.map((peer) => renderPeerRow(peer, rosterOnly)).join("")}
           </tbody>
         </table>
+        </div>
       `;
     } else {
       peerTableHtml = `<div class="meta-subtitle" style="margin-top:6px;">no peers connected</div>`;
@@ -388,10 +404,10 @@ type TopoNode = {
   hostID?: string;
 };
 
-function renderTopology(rows: WGHubStatusRow[]): string {
+function renderTopology(rows: WGHubStatusRow[], allHubs: WGHubStatusRow[] = rows): string {
   const GLOW = "noc-glow"; // nocSvg's default glow-filter id
   const hubByPubkey = new Map<string, WGHubStatusRow>();
-  rows.forEach((r) => {
+  allHubs.forEach((r) => {
     if (r.pubkey) hubByPubkey.set(r.pubkey, r);
   });
 
@@ -491,40 +507,51 @@ function renderTopology(rows: WGHubStatusRow[]): string {
 
 function applyStatusView(): void {
   if (hubStatusGrid) hubStatusGrid.hidden = topoView;
-  if (hubTopologyWrap) hubTopologyWrap.hidden = !topoView;
+  if (hubTopologyWrap) hubTopologyWrap.hidden = !topoView || statusCache.length === 0;
   if (hubViewToggle) hubViewToggle.textContent = topoView ? "▤ 列表" : "🌐 拓扑";
+}
+
+function renderStatus(): void {
+  const selected = statusHubFilter.value;
+  const rows = selected ? statusCache.filter((r) => String(r.id) === selected) : statusCache;
+  hubStatusGrid.innerHTML = "";
+  hubTopology.innerHTML = "";
+  hubStatusEmpty.hidden = rows.length !== 0;
+  hubStatusEmpty.textContent = selected ? "该 Hub 暂无状态数据。" : "暂无 Hub。";
+  rows.forEach((r) => hubStatusGrid.appendChild(renderHubCard(r)));
+  if (rows.length) hubTopology.innerHTML = renderTopology(rows, statusCache);
+  applyStatusView();
+  const reported = rows.filter((r) => r.status !== null).length;
+  const stale = rows.filter((r) => r.status?.stale === true).length;
+  hubStatusSummary.textContent = rows.length
+    ? `${reported}/${rows.length} reporting${stale ? ` · ${stale} stale` : ""}`
+    : "no hubs";
 }
 
 async function refreshStatus(): Promise<void> {
   if (!hubStatusGrid) return;
   try {
     const { data } = await listWGHubStatus();
-    const rows: WGHubStatusRow[] = data.hubs ?? [];
-    hubStatusGrid.innerHTML = "";
-    if (hubTopology) hubTopology.innerHTML = "";
-    if (rows.length === 0) {
-      if (hubStatusEmpty) hubStatusEmpty.hidden = false;
-      if (hubTopologyWrap) hubTopologyWrap.hidden = true;
-      if (hubStatusSummary) hubStatusSummary.textContent = "no hubs";
-      return;
+    if (data.error) throw new Error(data.error);
+    statusCache = data.hubs ?? [];
+    const selected = statusHubFilter.value;
+    statusHubFilter.replaceChildren(new Option("全部 Hub", ""));
+    for (const h of statusCache) {
+      statusHubFilter.add(new Option(h.label ? `${h.slug}（${h.label}）` : h.slug, String(h.id)));
     }
-    if (hubStatusEmpty) hubStatusEmpty.hidden = true;
-    rows.forEach((r: WGHubStatusRow) => hubStatusGrid.appendChild(renderHubCard(r)));
-    if (hubTopology) hubTopology.innerHTML = renderTopology(rows);
-    applyStatusView();
-    const reported = rows.filter((r: WGHubStatusRow) => r.status !== null).length;
-    const stale = rows.filter((r: WGHubStatusRow) => r.status?.stale === true).length;
-    const summary =
-      stale > 0
-        ? `${reported}/${rows.length} reporting · ${stale} stale`
-        : `${reported}/${rows.length} reporting`;
-    if (hubStatusSummary) hubStatusSummary.textContent = summary;
+    const selectionExists = selected === "" || statusCache.some((h) => String(h.id) === selected);
+    statusHubFilter.value = statusFilterInitialized && selectionExists
+      ? selected
+      : statusCache.length ? String(statusCache[0].id) : "";
+    if (statusCache.length) statusFilterInitialized = true;
+    renderStatus();
   } catch (err) {
     if (hubStatusSummary) hubStatusSummary.textContent = `error: ${(err as Error).message}`;
   }
 }
 
 hubStatusRefreshBtn?.addEventListener("click", () => void refreshStatus());
+statusHubFilter.addEventListener("change", renderStatus);
 hubViewToggle?.addEventListener("click", () => {
   topoView = !topoView;
   applyStatusView();
@@ -543,9 +570,9 @@ const hubsSummary = byId<HTMLElement>("hubsSummary");
 const hubsRefreshBtn = byId<HTMLButtonElement>("hubsRefreshBtn");
 
 function hubStatus(h: WGHub): string {
-  if (h.bound_device_id) return `🟢 已绑定 dev#${h.bound_device_id}`;
-  if (h.endpoint) return "⚠ 等待 hub install";
-  return "⚪ 未配置";
+  if (h.bound_device_id) return `已绑定 dev#${h.bound_device_id}`;
+  if (h.endpoint) return "等待 hub install";
+  return "未配置";
 }
 
 function renderHubRow(h: WGHub): HTMLTableRowElement {
@@ -555,7 +582,7 @@ function renderHubRow(h: WGHub): HTMLTableRowElement {
     ? routes.map((r) => `<code>${r}</code>`).join(", ")
     : "—";
   const cells = [
-    `<code>${h.slug}</code>`,
+    `${renderStatusDot(h.bound_device_id ? "online" : h.endpoint ? "pending" : "unknown", hubStatus(h))}<code>${esc(h.slug)}</code>`,
     h.label || "—",
     `<code>${h.endpoint || "—"}</code>`,
     `<code>${h.mesh_cidr}</code>`,
@@ -656,6 +683,8 @@ async function refreshHubs(): Promise<void> {
     hubsEmpty.hidden = items.length !== 0;
     // Keep token-create hub dropdown in sync.
     syncTokenCreateHubDropdown();
+    syncDevicesHubFilter();
+    if (devicesCache !== null) renderDevices();
     // Cross-hub link publishing: populate the picker + refresh the link list.
     populateLinkHubSelects(items);
     void refreshHubLinks();
@@ -1050,28 +1079,61 @@ const devicesEmpty = byId<HTMLElement>("devicesEmpty");
 const devicesSummary = byId<HTMLElement>("devicesSummary");
 const devicesRefreshBtn = byId<HTMLButtonElement>("devicesRefreshBtn");
 const includeRemovedCheck = byId<HTMLInputElement>("includeRemovedCheck");
+const devicesHubFilter = byId<HTMLSelectElement>("devicesHubFilter");
+let devicesCache: WGDevice[] | null = null;
 
-function deviceStatus(dev: WGDevice): string {
-  if (dev.removed_at) return `🔴 已下线 ${fmtRelative(dev.removed_at)}`;
-  let base: string;
-  if (!dev.last_seen_at) {
-    base = "⚪ 从未上报";
-  } else {
+function syncDevicesHubFilter(): void {
+  const selected = devicesHubFilter.value;
+  const hubs = new Map(hubsCache.map((h) => [h.id, h.label ? `${h.slug}（${h.label}）` : h.slug]));
+  // Keep hubs represented only by devices available (including removed devices).
+  for (const d of devicesCache ?? []) {
+    if (!hubs.has(d.hub_id)) hubs.set(d.hub_id, d.hub_slug || `#${d.hub_id}`);
+  }
+  devicesHubFilter.replaceChildren(new Option("全部 Hub", ""));
+  for (const [id, label] of hubs) {
+    devicesHubFilter.add(new Option(label, String(id)));
+  }
+  devicesHubFilter.value = hubs.has(Number(selected)) ? selected : "";
+}
+
+function renderDevices(): void {
+  const all = devicesCache ?? [];
+  const hubID = devicesHubFilter.value;
+  const items = hubID ? all.filter((d) => String(d.hub_id) === hubID) : all;
+  devicesTbody.innerHTML = "";
+  items.forEach((d) => devicesTbody.appendChild(renderDeviceRow(d)));
+  devicesSummary.textContent = hubID ? `${items.length} / ${all.length} 台` : `${items.length} 台`;
+  devicesTable.hidden = items.length === 0;
+  devicesEmpty.hidden = items.length !== 0;
+  devicesEmpty.textContent = hubID
+    ? "该 Hub 下暂无设备。"
+    : "暂无设备。等第一台 mac 跑完 install.sh 后会出现在这里。";
+}
+
+function renderDeviceName(dev: WGDevice, hostname: string): string {
+  let state: "unknown" | "online" | "pending" | "offline" = "unknown";
+  let label = "从未上报";
+  let warning = "";
+  if (dev.removed_at) {
+    state = "offline";
+    label = `已下线 ${fmtRelative(dev.removed_at)}`;
+  } else if (dev.last_seen_at) {
     const ageSec = Math.floor((Date.now() - new Date(dev.last_seen_at).getTime()) / 1000);
-    if (ageSec < 600) base = "🟢 在线";
-    else if (ageSec < 86400) base = "🟡 待确认";
-    else base = "🔴 离线";
+    if (ageSec < 600) { state = "online"; label = "在线"; }
+    else if (ageSec < 86400) { state = "pending"; label = "待确认"; }
+    else { state = "offline"; label = "离线"; }
   }
   // Append a token-expiry warning if expiry is within 7 days.
-  if (dev.token_expires_at) {
+  if (!dev.removed_at && dev.token_expires_at) {
     const msLeft = new Date(dev.token_expires_at).getTime() - Date.now();
-    if (msLeft <= 0) return `${base} ⚠ token 已过期`;
-    if (msLeft < 7 * 86400_000) {
+    if (msLeft <= 0) warning = "⚠ token 已过期";
+    else if (msLeft < 7 * 86400_000) {
       const days = Math.max(1, Math.floor(msLeft / 86400_000));
-      return `${base} ⏰ token ${days}d 后过期`;
+      warning = `⏰ token ${days}d 后过期`;
     }
   }
-  return base;
+  return `<span class="wg-device-name">${renderStatusDot(state, label)}${hostname}` +
+    (warning ? `<span class="meta-subtitle">${esc(warning)}</span>` : "") + "</span>";
 }
 
 // renderDeviceEgressCell — P2 egress opt-in dropdown. Options = hubs that
@@ -1142,23 +1204,23 @@ function renderDeviceRow(dev: WGDevice): HTMLTableRowElement {
   const hostnameCell = dev.host_id
     ? `<a href="${hostsLinkURL(dev.host_id)}" title="在 Hosts 模块查看该主机">${esc(dev.hostname || dev.host_id)}</a>`
     : esc(dev.hostname || "—");
+  const nameCell = document.createElement("td");
+  nameCell.innerHTML = renderDeviceName(dev, hostnameCell);
+  tr.appendChild(nameCell);
+  tr.appendChild(renderDeviceEgressCell(dev));
   const cells: string[] = [
-    `<code style="font-size:11px;">${dev.device_id}</code>`,
-    hostnameCell,
     dev.hub_slug || `#${dev.hub_id}`,
     dev.site_slug || `#${dev.site_id}`,
     `<code>${dev.device_ip}</code>`,
     dev.wg_endpoint ? `<code>${dev.wg_endpoint}</code>` : "—",
     `${dev.os}/${dev.arch} <span class="meta-subtitle">${dev.agent_ver || ""}</span>`,
     fmtRelative(dev.last_seen_at),
-    deviceStatus(dev),
   ];
   cells.forEach((html) => {
     const td = document.createElement("td");
     td.innerHTML = html;
     tr.appendChild(td);
   });
-  tr.appendChild(renderDeviceEgressCell(dev));
   const cellActions = document.createElement("td");
   if (!dev.removed_at) {
     const btn = document.createElement("button");
@@ -1184,12 +1246,10 @@ function renderDeviceRow(dev: WGDevice): HTMLTableRowElement {
 async function refreshDevices(): Promise<void> {
   try {
     const { data } = await listWGDevices(includeRemovedCheck.checked);
-    const items = data.devices ?? [];
-    devicesTbody.innerHTML = "";
-    items.forEach((d) => devicesTbody.appendChild(renderDeviceRow(d)));
-    devicesSummary.textContent = `${items.length} 台`;
-    devicesTable.hidden = items.length === 0;
-    devicesEmpty.hidden = items.length !== 0;
+    if (data.error) throw new Error(data.error);
+    devicesCache = data.devices ?? [];
+    syncDevicesHubFilter();
+    renderDevices();
   } catch (err) {
     devicesEmpty.hidden = false;
     devicesEmpty.textContent = `加载失败：${(err as Error).message}`;
@@ -1197,6 +1257,7 @@ async function refreshDevices(): Promise<void> {
 }
 
 devicesRefreshBtn?.addEventListener("click", () => void refreshDevices());
+devicesHubFilter.addEventListener("change", renderDevices);
 includeRemovedCheck?.addEventListener("change", () => void refreshDevices());
 document.getElementById("hideRevokedCheck")?.addEventListener("change", () => void refreshTokens());
 

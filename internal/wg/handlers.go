@@ -664,8 +664,9 @@ func (p *Plugin) handleWGHubPeers(c *gin.Context) {
 // ---- /v1/heartbeat ----
 
 type wgHeartbeatRequest struct {
-	LANAddrs   []WGLanAddr `json:"lan_addrs"`
-	WGEndpoint string      `json:"wg_endpoint"`
+	Status     *wgHeartbeatStatus `json:"status"`
+	LANAddrs   []WGLanAddr        `json:"lan_addrs"`
+	WGEndpoint string             `json:"wg_endpoint"`
 	Stats      *struct {
 		RXBytes          *int64 `json:"rx_bytes"`
 		TXBytes          *int64 `json:"tx_bytes"`
@@ -694,7 +695,8 @@ func (p *Plugin) handleWGHeartbeat(c *gin.Context) {
 		rec.LastHandshakeSec = req.Stats.LastHandshakeSec
 	}
 	hubSlug := ""
-	if hub, _ := p.getWGHubByID(dev.HubID); hub != nil {
+	hub, _ := p.getWGHubByID(dev.HubID)
+	if hub != nil {
 		hubSlug = hub.Slug
 	}
 	if err := p.insertWGHeartbeat(rec, time.Now().UTC()); err != nil {
@@ -703,6 +705,10 @@ func (p *Plugin) handleWGHeartbeat(c *gin.Context) {
 		return
 	}
 	p.metrics.recordWGHeartbeat(hubSlug, "ok")
+	if err := p.storeHubHeartbeatStatus(dev, hub, req.Status, time.Now().UTC()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "hub status: " + err.Error()})
+		return
+	}
 	c.Status(http.StatusOK)
 }
 

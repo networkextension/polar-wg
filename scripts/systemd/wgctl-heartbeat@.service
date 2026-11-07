@@ -1,0 +1,7 @@
+[Unit]
+Description=WireGuard hub telemetry heartbeat for %i
+After=network-online.target wg-quick@%i.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wgctl-heartbeat-linux %i
+TimeoutStartSec=45

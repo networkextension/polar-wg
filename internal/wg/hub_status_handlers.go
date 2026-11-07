@@ -77,10 +77,20 @@ func (p *Plugin) handleAdminWGHubStatus(c *gin.Context) {
 				enrichPeersWithHostID(row.Status, hostIDByPubkey)
 			}
 		}
-		// No live wgctl poll for this hub (only the hub that wg-svc runs on
-		// self-polls). Fall back to the registered roster so the topology still
-		// draws this hub's client devices — handshake unknown ("never"), since
-		// this is membership, not liveness.
+		// Prefer a newer authenticated native-agent heartbeat over dock telemetry.
+		if sample, ok, err := p.hubHeartbeatSample(h); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "hub heartbeat status unavailable"})
+			return
+		} else if ok && (row.Status == nil || sample.RecordedAt.After(row.Status.RecordedAt)) {
+			ttl := time.Duration(h.RefreshSec*2) * time.Second
+			if ttl < time.Minute {
+				ttl = time.Minute
+			}
+			row.Status = buildHubStatusEntry(sample, time.Since(sample.RecordedAt) > ttl)
+			enrichPeersWithHostID(row.Status, hostIDByPubkey)
+		}
+		// No live sample: render registered membership only. It does not
+		// establish liveness or a last-handshake timestamp.
 		if row.Status == nil {
 			if rs := p.rosterStatusForHub(h); rs != nil {
 				enrichPeersWithHostID(rs, hostIDByPubkey)
