@@ -411,8 +411,15 @@
             </div>
           </div>
           <div class="settings-section-card">
-            <div class="settings-section-title">wg-mac 一键安装命令</div>
-            <textarea id="plaintextInstallCmd" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px;" aria-label="wg-mac 一键安装命令"></textarea>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
+              <label class="settings-section-title" for="plaintextInstallOS" style="margin:0;">一键安装命令</label>
+              <select id="plaintextInstallOS" class="input" aria-label="选择安装平台" style="width:auto; min-width:140px;">
+                <option value="darwin">macOS</option>
+                <option value="linux">Linux</option>
+                <option value="freebsd">FreeBSD</option>
+              </select>
+            </div>
+            <textarea id="plaintextInstallCmd" class="input" readonly rows="2" style="font-family: ui-monospace, Menlo, monospace; font-size: 11px; resize: vertical; min-height: 56px;" aria-label="一键安装命令"></textarea>
             <button id="plaintextInstallCopyBtn" type="button" class="btn-inline btn-secondary" style="margin-top:6px;">📋 复制命令</button>
           </div>
           <!-- Phase 11 C3: only shown when WG_HEADSCALE_ENABLED=1 on the
@@ -469,6 +476,6 @@
       </div>
     </div>
 
-    <script type="module" src="/scripts/wg-tokens.js?v=20261107-status-list"></script>
+    <script type="module" src="/scripts/wg-tokens.js?v=20261110-install-platform"></script>
   </body>
 </html>
