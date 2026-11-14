@@ -808,9 +808,18 @@ const createTokenMeshCidr = byId<HTMLInputElement>("createTokenMeshCidr");
 const plaintextModal = byId<HTMLElement>("plaintextModal");
 const plaintextValue = byId<HTMLInputElement>("plaintextValue");
 const plaintextCopyBtn = byId<HTMLButtonElement>("plaintextCopyBtn");
+const plaintextInstallOS = byId<HTMLSelectElement>("plaintextInstallOS");
 const plaintextInstallCmd = byId<HTMLTextAreaElement>("plaintextInstallCmd");
 const plaintextInstallCopyBtn = byId<HTMLButtonElement>("plaintextInstallCopyBtn");
 const plaintextDoneBtn = byId<HTMLButtonElement>("plaintextDoneBtn");
+let plaintextInstallToken = "";
+const renderPlaintextInstallCommand = () => {
+  const origin = window.location.origin;
+  const os = plaintextInstallOS.value;
+  const shell = os === "freebsd" ? "sh" : "bash";
+  plaintextInstallCmd.value = `curl -fsSL '${origin}/v1/install?os=${os}' | sudo ${shell} -s -- --token=${plaintextInstallToken}`;
+};
+plaintextInstallOS.addEventListener("change", renderPlaintextInstallCommand);
 // Phase 11 C3 — optional Tailscale PreAuthKey block; surfaced only
 // when the server responds with `tailscale_authkey` (i.e. embedded
 // headscale is enabled at the dock level).
@@ -1036,8 +1045,8 @@ createTokenSubmitBtn?.addEventListener("click", async () => {
     closeCreateTokenModal();
     const plaintext = data.token.plaintext;
     plaintextValue.value = plaintext;
-    const origin = window.location.origin;
-    plaintextInstallCmd.value = `curl -sSL ${origin}/v1/install | sudo bash -s -- --token=${plaintext}`;
+    plaintextInstallToken = plaintext;
+    renderPlaintextInstallCommand();
     // Phase 11 C3: if embedded headscale was enabled at server boot,
     // a matching tskey-... was minted alongside the wg-mac token.
     // Show both so the operator can hand a unified bundle out.
